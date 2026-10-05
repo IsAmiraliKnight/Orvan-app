@@ -1,0 +1,32 @@
+{
+  "name": "orvan",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "build:blank": "node scripts/build-blank.mjs",
+    "start": "next start",
+    "serve": "npx --yes serve out -l 4173",
+    "serve:blank": "npx --yes serve \"out 2\" -l 4174",
+    "lint": "eslint",
+    "test": "tsx --test src/lib/domain/*.test.ts"
+  },
+  "dependencies": {
+    "next": "15.5.4",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^22",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "15.5.4",
+    "tailwindcss": "^4",
+    "tsx": "^4.23.12",
+    "typescript": "^5"
+  }
+}

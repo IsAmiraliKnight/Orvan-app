@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "orvan",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 3000
+    },
+    {
+      "name": "orvan-out",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "serve"],
+      "port": 4173
+    },
+    {
+      "name": "orvan-blank",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "serve:blank"],
+      "port": 4174
+    }
+  ]
+}

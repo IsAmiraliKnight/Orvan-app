@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__visualize__read_me",
+      "Bash(python -c ' *)",
+      "mcp__visualize__show_widget",
+      "Read(//c/Users/sabasys/.claude/plans/**)",
+      "PowerShell(node --version)",
+      "PowerShell(npm --version)",
+      "mcp__Claude_Preview__preview_start",
+      "PowerShell(\\(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.InterfaceAlias -notmatch 'Loopback|vEthernet|WSL' -and $_.IPAddress -notmatch '^169\\\\.' }\\) | Select-Object InterfaceAlias, IPAddress | Format-Table -AutoSize)",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"http://localhost:4174/\" -UseBasicParsing -TimeoutSec 10; \"status \" + $r.StatusCode + \" len \" + $r.Content.Length } catch { \"ERR: \" + $_.Exception.Message })"
+    ]
+  }
+}

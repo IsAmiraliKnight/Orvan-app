@@ -1,0 +1,200 @@
+@import "tailwindcss";
+
+@theme {
+  /* Dark is the default. Neutrals are tinted toward the primary hue (~165°)
+     so the greys never read as blue next to the accent. */
+  --color-bg: #0a0d0c;
+  --color-surface: #0f1413;
+  --color-surface-2: #161d1b;
+  --color-surface-3: #1d2624;
+  /* For things that float above the page rather than sit in it. Elevation
+     moves *away* from the page: lighter here, and pure white in light mode,
+     where surface-2 would read as a recess instead. */
+  --color-surface-float: #1b2422;
+  --color-line: #212b28;
+
+  --color-ink: #ecf2ef;
+  --color-ink-dim: #8a9a94;
+  --color-ink-faint: #5a6a64;
+
+  --color-accent: #2ea98c;
+  /* The readable-on-background variant. It moves *lighter* in dark mode and
+     *darker* in light mode, which is why it is a token and not an opacity. */
+  --color-accent-soft: #57d7b5;
+  --color-accent-deep: #1a6b58;
+  /* Text and icons sitting on a filled accent. Near-black in both themes,
+     because the accent itself never changes lightness. */
+  --color-on-accent: #06100d;
+
+  --color-flame: #ff7a45;
+  --color-coin: #ffc53d;
+
+  --color-p-high: #ff6b6b;
+  --color-p-med: #ffb020;
+  --color-p-low: #6b7a75;
+
+  /* Chart series. 1–3 walk the primary ramp; 4–5 are the contrast pair. */
+  --color-chart-1: #2ea98c;
+  --color-chart-2: #57d7b5;
+  --color-chart-3: #1a6b58;
+  --color-chart-4: #ffc53d;
+  --color-chart-5: #ff7a45;
+
+  /* Elevation. Pure black is right on a near-black page and far too heavy on
+     a white one, so the shadow colour is themed like everything else. */
+  --color-shade: #000000;
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/*
+ * Light theme. Same token names, so no component needs to know which theme is
+ * active — `data-theme` is set on <html> before first paint by the inline
+ * script in the root layout.
+ */
+[data-theme="light"] {
+  --color-bg: #f2f6f4;
+  --color-surface: #ffffff;
+  --color-surface-2: #eef3f1;
+  --color-surface-3: #e0e9e5;
+  --color-surface-float: #ffffff;
+  --color-line: #d8e3de;
+
+  --color-ink: #0c1614;
+  --color-ink-dim: #4e615b;
+  /* Darker than the dark-mode equivalent looks: this tier carries 10–11px
+     labels, and on white it needs to clear 4.5:1 to stay legible. */
+  --color-ink-faint: #64766f;
+
+  --color-accent: #2ea98c;
+  /* Dark enough to clear 4.5:1 not just on white, but on the pale accent tints
+     it usually sits on — the selected pill in the bottom bar is the worst of
+     them, and #14806a only reached 3.8:1 there. */
+  --color-accent-soft: #0f6b59;
+  --color-accent-deep: #0e6152;
+
+  --color-flame: #c2481a;
+  --color-coin: #8f6a08;
+
+  --color-p-high: #d94747;
+  --color-p-med: #b7790a;
+  --color-p-low: #7c8e88;
+
+  --color-chart-1: #2ea98c;
+  --color-chart-2: #14806a;
+  --color-chart-3: #7fd8c0;
+  --color-chart-4: #d99a12;
+  --color-chart-5: #e0562a;
+
+  /* A green-black rather than pure black, so shadows sit in the same hue
+     family as the surfaces they fall on. */
+  --color-shade: #0d2a23;
+}
+
+html,
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Chrome/Safari render date and time inputs with a white glyph well. */
+input[type="date"]::-webkit-calendar-picker-indicator,
+input[type="time"]::-webkit-calendar-picker-indicator {
+  filter: invert(0.7);
+  cursor: pointer;
+}
+
+[data-theme="light"] input[type="date"]::-webkit-calendar-picker-indicator,
+[data-theme="light"] input[type="time"]::-webkit-calendar-picker-indicator {
+  filter: none;
+}
+
+/* Keeps the rubber-band momentum on iOS inside a scrolling panel. Tailwind has
+   no utility for it, and without it a flick in the calendar stops dead. */
+.momentum-scroll {
+  -webkit-overflow-scrolling: touch;
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Floating "+3 XP" that rises out of a completed row. */
+@keyframes xp-float {
+  0% {
+    opacity: 0;
+    transform: translateY(4px) scale(0.9);
+  }
+  20% {
+    opacity: 1;
+    transform: translateY(-2px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-22px) scale(1);
+  }
+}
+
+.animate-xp-float {
+  animation: xp-float 1.1s ease-out forwards;
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-pop-in {
+  animation: pop-in 0.18s ease-out forwards;
+}
+
+@keyframes slide-in-end {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.animate-slide-in-end {
+  animation: slide-in-end 0.22s ease-out forwards;
+}
+
+/* Bars and rings grow from nothing on first paint so a static chart still
+   feels like it was measured. */
+@keyframes grow-y {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+.animate-grow-y {
+  transform-origin: bottom;
+  animation: grow-y 0.6s cubic-bezier(0.2, 0.8, 0.3, 1) backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-xp-float,
+  .animate-pop-in,
+  .animate-slide-in-end,
+  .animate-grow-y {
+    animation-duration: 0.01ms;
+    animation-iteration-count: 1;
+  }
+}
