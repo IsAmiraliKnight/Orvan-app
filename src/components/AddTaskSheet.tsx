@@ -6,7 +6,7 @@ import { ColorPicker } from "@/components/ColorPicker";
 import { DatePicker, TimePicker } from "@/components/DateField";
 import { today } from "@/lib/domain/dates";
 import { RECURRENCES, recurrenceLabel, sameRecurrence } from "@/lib/domain/recurrence";
-import type { LocalDate, Priority, Recurrence } from "@/lib/domain/types";
+import type { LocalDate, Priority, Recurrence, Task } from "@/lib/domain/types";
 import { PRIORITY_XP, prioritySlotsLeft } from "@/lib/domain/xp";
 import { useOrvan, type NewTaskInput } from "@/lib/store/store";
 
@@ -32,6 +32,8 @@ interface Props {
   defaultTime?: string;
   defaultDurationMin?: number;
   defaultProjectId?: string;
+  /** When present, the same form edits this task instead of creating one. */
+  task?: Task;
 }
 
 export function AddTaskSheet({
@@ -42,6 +44,7 @@ export function AddTaskSheet({
   defaultTime,
   defaultDurationMin,
   defaultProjectId,
+  task,
 }: Props) {
   const { state } = useOrvan();
   const [title, setTitle] = useState("");
@@ -61,10 +64,16 @@ export function AddTaskSheet({
    */
   useEffect(() => {
     if (!open) return;
-    setDueDate(defaultDate ?? today());
-    setDueTime(defaultTime ?? "");
-    setDurationMin(defaultDurationMin ?? 60);
-  }, [open, defaultDate, defaultTime, defaultDurationMin]);
+    setTitle(task?.title ?? "");
+    setPriority(task?.priority ?? "medium");
+    setDueDate(task?.dueDate ?? defaultDate ?? today());
+    setDueTime(task?.dueTime ?? defaultTime ?? "");
+    setDurationMin(task?.durationMin ?? defaultDurationMin ?? 60);
+    setRecurrence(task?.recurrence);
+    setColorKey(task?.colorKey);
+    setProjectId(task?.projectId ?? defaultProjectId);
+    setProNote(false);
+  }, [open, task, defaultDate, defaultTime, defaultDurationMin, defaultProjectId]);
 
   if (!open) return null;
 
@@ -92,20 +101,16 @@ export function AddTaskSheet({
       projectId,
       recurrence,
     });
-    setTitle("");
-    setPriority("medium");
-    setDueDate(defaultDate ?? today());
-    setDueTime(defaultTime ?? "");
-    setDurationMin(defaultDurationMin ?? 60);
-    setRecurrence(undefined);
-    setColorKey(undefined);
     onClose();
   }
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-end justify-center bg-shade/60 p-0 backdrop-blur-sm sm:items-center sm:p-4"
-      onClick={onClose}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClose();
+      }}
       role="presentation"
     >
       <div
@@ -113,7 +118,7 @@ export function AddTaskSheet({
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
-        aria-label="Add task"
+        aria-label={task ? "Edit task" : "Add task"}
       >
         <input
           autoFocus
@@ -201,8 +206,8 @@ export function AddTaskSheet({
            */
           <p className="rounded-lg border border-accent/25 bg-accent/10 px-3 py-2.5 text-[11px] leading-relaxed text-accent-soft">
             <span className="font-medium">{recurrenceLabel(recurrence)}</span> — repeats pay the
-            Medium rate, +{PRIORITY_XP.medium} XP each time. The next one appears as soon as you
-            tick this one off.
+            Medium rate, +{PRIORITY_XP.medium} XP each time. Each scheduled day appears
+            automatically.
           </p>
         ) : (
           <div className="flex gap-2">
@@ -249,7 +254,7 @@ export function AddTaskSheet({
             disabled={!title.trim()}
             className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-on-accent disabled:opacity-40"
           >
-            Add task
+            {task ? "Save changes" : "Add task"}
           </button>
         </div>
       </div>

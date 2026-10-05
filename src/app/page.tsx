@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { AddTaskSheet } from "@/components/AddTaskSheet";
 import { DatePicker, relativeLabel } from "@/components/DateField";
@@ -41,6 +41,7 @@ interface SectionProps {
   projects: Project[];
   flash: { id: string; text: string } | null;
   onToggle: (id: string) => void;
+  onEdit: (task: Task) => void;
   onDelete: (id: string) => void;
 }
 
@@ -51,6 +52,7 @@ function Section({
   projects,
   flash,
   onToggle,
+  onEdit,
   onDelete,
 }: SectionProps) {
   if (tasks.length === 0) return null;
@@ -71,6 +73,7 @@ function Section({
               projectColor={project?.color}
               flash={flash?.id === t.id ? flash.text : undefined}
               onToggle={onToggle}
+              onEdit={onEdit}
               onDelete={onDelete}
             />
           );
@@ -81,8 +84,18 @@ function Section({
 }
 
 export default function HomePage() {
-  const { state, ready, addTask, completeTask, reopenTask, deleteTask } = useOrvan();
+  const {
+    state,
+    ready,
+    addTask,
+    updateTask,
+    ensureRecurringTasksThrough,
+    completeTask,
+    reopenTask,
+    deleteTask,
+  } = useOrvan();
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [quickTitle, setQuickTitle] = useState("");
   const [levelUp, setLevelUp] = useState<number | null>(null);
   const [flash, setFlash] = useState<{ id: string; text: string } | null>(null);
@@ -93,6 +106,13 @@ export default function HomePage() {
   const day = today();
   const [viewDate, setViewDate] = useState<LocalDate>(day);
   const isToday = viewDate === day;
+
+  // Keep the fixed day tabs populated even before somebody completes today's
+  // occurrence. Custom dates extend the materialised range on demand.
+  useEffect(() => {
+    if (!ready) return;
+    ensureRecurringTasksThrough(viewDate > addDays(day, 2) ? viewDate : addDays(day, 2));
+  }, [ready, day, viewDate, state.tasks, ensureRecurringTasksThrough]);
 
   const { overdue, open, done } = useMemo(() => {
     const forDay = state.tasks.filter((t) => (t.dueDate ?? day) === viewDate);
@@ -172,12 +192,8 @@ export default function HomePage() {
       setToast("No XP — every slot for that priority is used up today.");
     } else if (result.reason === "daily_cap") {
       setToast(`Daily task XP cap reached (${DAILY_TASK_XP_CAP}). Quests still pay out.`);
-    } else if (result.repeatedOn) {
-      // The next copy is created silently; without this the repeat looks like
-      // it simply stopped.
-      setToast(`Repeats — the next one is on ${relativeLabel(result.repeatedOn, day)}.`);
     }
-    if (result.reason !== "full" || result.repeatedOn) {
+    if (result.reason !== "full") {
       setTimeout(() => setToast(null), 3200);
     }
 
@@ -306,6 +322,7 @@ export default function HomePage() {
                 projects={state.projects}
                 flash={flash}
                 onToggle={handleToggle}
+                onEdit={setEditingTask}
                 onDelete={deleteTask}
               />
               <Section
@@ -314,6 +331,7 @@ export default function HomePage() {
                 projects={state.projects}
                 flash={flash}
                 onToggle={handleToggle}
+                onEdit={setEditingTask}
                 onDelete={deleteTask}
               />
               <Section
@@ -322,6 +340,7 @@ export default function HomePage() {
                 projects={state.projects}
                 flash={flash}
                 onToggle={handleToggle}
+                onEdit={setEditingTask}
                 onDelete={deleteTask}
               />
             </>
@@ -343,10 +362,17 @@ export default function HomePage() {
       )}
 
       <AddTaskSheet
-        open={sheetOpen}
-        onClose={() => setSheetOpen(false)}
-        onSubmit={addTask}
+        open={sheetOpen || editingTask !== null}
+        onClose={() => {
+          setSheetOpen(false);
+          setEditingTask(null);
+        }}
+        onSubmit={(input) => {
+          if (editingTask) updateTask(editingTask.id, input);
+          else addTask(input);
+        }}
         defaultDate={viewDate}
+        task={editingTask ?? undefined}
       />
       <LevelUpModal level={levelUp} onClose={() => setLevelUp(null)} />
     </>

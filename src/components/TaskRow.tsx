@@ -16,6 +16,7 @@ interface Props {
   projectColor?: string;
   flash?: string;
   onToggle: (id: string) => void;
+  onEdit: (task: Task) => void;
   onDelete: (id: string) => void;
 }
 
@@ -25,6 +26,7 @@ export function TaskRow({
   projectColor,
   flash,
   onToggle,
+  onEdit,
   onDelete,
 }: Props) {
   const done = task.status === "done";
@@ -50,29 +52,48 @@ export function TaskRow({
           aria-hidden="true"
         />
       )}
-      <button
-        type="button"
-        onClick={() => onToggle(task.id)}
-        aria-label={done ? `Reopen ${task.title}` : `Complete ${task.title}`}
-        className={`grid size-5 shrink-0 place-items-center rounded-md border transition-colors ${
-          done
-            ? "border-accent bg-accent text-on-accent"
-            : "border-line hover:border-ink-dim"
-        }`}
-      >
-        {done && (
-          <svg viewBox="0 0 12 12" className="size-3" aria-hidden="true">
+      <span className="flex shrink-0 items-center gap-1">
+        <button
+          type="button"
+          onClick={() => onToggle(task.id)}
+          aria-label={done ? `Reopen ${task.title}` : `Complete ${task.title}`}
+          className={`grid size-5 shrink-0 place-items-center rounded-md border transition-colors ${
+            done
+              ? "border-accent bg-accent text-on-accent"
+              : "border-line hover:border-ink-dim"
+          }`}
+        >
+          {done && (
+            <svg viewBox="0 0 12 12" className="size-3" aria-hidden="true">
+              <path
+                d="M2.5 6.2 L4.8 8.5 L9.5 3.8"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onDelete(task.id)}
+          aria-label={`Delete ${task.title}`}
+          className="grid size-5 place-items-center rounded-md text-ink-faint transition-colors hover:bg-p-high/10 hover:text-p-high"
+        >
+          <svg viewBox="0 0 16 16" className="size-3.5" aria-hidden="true">
             <path
-              d="M2.5 6.2 L4.8 8.5 L9.5 3.8"
+              d="M4 4l8 8M12 4l-8 8"
               fill="none"
               stroke="currentColor"
-              strokeWidth="2"
+              strokeWidth="1.5"
               strokeLinecap="round"
-              strokeLinejoin="round"
             />
           </svg>
-        )}
-      </button>
+        </button>
+      </span>
 
       <span
         className={`size-1.5 shrink-0 rounded-full ${style.dot}`}
@@ -80,7 +101,12 @@ export function TaskRow({
         aria-hidden="true"
       />
 
-      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+      <button
+        type="button"
+        onClick={() => onEdit(task)}
+        aria-label={`Edit ${task.title}`}
+        className="flex min-w-0 flex-1 items-center gap-1.5 text-start"
+      >
         {task.recurrence && (
           <RepeatGlyph className="size-3.5 text-accent-soft" />
         )}
@@ -94,7 +120,7 @@ export function TaskRow({
         {task.dueTime && (
           <span className="shrink-0 text-[11px] text-ink-faint tabular-nums">{task.dueTime}</span>
         )}
-      </span>
+      </button>
 
       {projectName && (
         <span
@@ -110,17 +136,18 @@ export function TaskRow({
 
       <button
         type="button"
-        onClick={() => onDelete(task.id)}
-        aria-label={`Delete ${task.title}`}
-        className="shrink-0 text-ink-faint opacity-0 transition-opacity hover:text-p-high focus:opacity-100 group-hover:opacity-100"
+        onClick={() => onEdit(task)}
+        aria-label={`Edit ${task.title}`}
+        className="grid size-6 shrink-0 place-items-center rounded-md text-ink-faint opacity-0 transition-opacity hover:bg-surface-3 hover:text-ink focus:opacity-100 group-hover:opacity-100"
       >
         <svg viewBox="0 0 16 16" className="size-4" aria-hidden="true">
           <path
-            d="M4 4l8 8M12 4l-8 8"
+            d="m3 11.5-.5 2 2-.5 7.6-7.6-1.5-1.5L3 11.5Zm6.5-6.5 1.5 1.5"
             fill="none"
             stroke="currentColor"
             strokeWidth="1.5"
             strokeLinecap="round"
+            strokeLinejoin="round"
           />
         </svg>
       </button>

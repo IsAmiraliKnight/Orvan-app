@@ -1,14 +1,12 @@
 import { addDays, parseLocalDate } from "./dates";
-import type { LocalDate, Priority, Recurrence } from "./types";
+import type { LocalDate, Priority, Recurrence, Task } from "./types";
 
 /**
  * Repeating tasks.
  *
- * There is no expansion pass that fills the calendar with a year of copies —
- * only one occurrence exists at a time, and finishing it spawns the next. A
- * repeating chore is a *habit*: the point is the one in front of you, and an
- * outline stuffed with fifty identical rows would make the day look busy
- * without anything actually being due.
+ * Occurrences are materialised only as far as the UI has actually visited.
+ * This makes tomorrow visible before today's task is complete without filling
+ * storage with an arbitrary year of copies.
  */
 
 /**
@@ -62,4 +60,55 @@ export function nextOccurrence(from: LocalDate, r: Recurrence): LocalDate {
   let next = addDays(from, 1);
   while (isoWeekday(next) > 5) next = addDays(next, 1);
   return next;
+}
+
+/**
+ * Fill every scheduled occurrence through `through`, independently of task
+ * completion. Returning the original array when nothing changed lets callers
+ * use this safely from an effect without creating a render loop.
+ *
+ * Older saved data may already contain the successor that the previous model
+ * created on completion. Dates are de-duplicated per series, so migrating that
+ * data cannot create a second copy.
+ */
+export function materializeRecurrences(
+  tasks: Task[],
+  through: LocalDate,
+  createId: () => string,
+  createdAt: string,
+): Task[] {
+  const additions: Task[] = [];
+  const roots = tasks.filter((task) => task.recurrence && !task.parentTaskId && task.dueDate);
+
+  for (const root of roots) {
+    const existingDates = new Set(
+      tasks
+        .filter((task) => task.id === root.id || task.parentTaskId === root.id)
+        .map((task) => task.dueDate)
+        .filter((date): date is LocalDate => date !== undefined),
+    );
+
+    let occurrence = root.dueDate!;
+    // A guard protects persisted data from ever turning a malformed recurrence
+    // into an unbounded loop.
+    for (let count = 0; occurrence < through && count < 10000; count += 1) {
+      occurrence = nextOccurrence(occurrence, root.recurrence!);
+      if (occurrence > through) break;
+      if (existingDates.has(occurrence)) continue;
+
+      existingDates.add(occurrence);
+      additions.push({
+        ...root,
+        id: createId(),
+        status: "open",
+        completedAt: undefined,
+        dueDate: occurrence,
+        occurrenceDate: occurrence,
+        parentTaskId: root.id,
+        createdAt,
+      });
+    }
+  }
+
+  return additions.length === 0 ? tasks : [...tasks, ...additions];
 }

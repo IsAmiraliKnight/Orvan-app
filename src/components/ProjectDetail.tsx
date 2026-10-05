@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+import { AddTaskSheet } from "@/components/AddTaskSheet";
 import { ColorPicker } from "@/components/ColorPicker";
 import { DatePicker, TimePicker, relativeLabel } from "@/components/DateField";
 import { Avatar, Bar, RepeatGlyph, Ring } from "@/components/ui";
@@ -39,6 +40,7 @@ export function ProjectDetail({ project, onClose }: { project: Project; onClose:
   const [dueTime, setDueTime] = useState("");
   const [recurrence, setRecurrence] = useState<Recurrence | undefined>(undefined);
   const [colorKey, setColorKey] = useState<string | undefined>(undefined);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
 
   /** The row currently showing its "add a sub-task" input. */
   const [addingUnder, setAddingUnder] = useState<string | null>(null);
@@ -56,10 +58,11 @@ export function ProjectDetail({ project, onClose }: { project: Project; onClose:
   const [options, setOptions] = useState(false);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && !renaming && onClose();
+    const onKey = (e: KeyboardEvent) =>
+      e.key === "Escape" && !renaming && !editingTask && onClose();
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose, renaming]);
+  }, [onClose, renaming, editingTask]);
 
   const tasks = useMemo(
     () => state.tasks.filter((t) => t.projectId === project.id),
@@ -273,6 +276,7 @@ export function ProjectDetail({ project, onClose }: { project: Project; onClose:
                     setAddingUnder={setAddingUnder}
                     onAddSub={addSub}
                     onToggle={(x) => (x.status === "done" ? reopenTask(x.id) : completeTask(x.id))}
+                    onEdit={setEditingTask}
                     onRecolour={(id, key) => updateTask(id, { colorKey: key })}
                     onDelete={deleteTask}
                   />
@@ -363,7 +367,7 @@ export function ProjectDetail({ project, onClose }: { project: Project; onClose:
 
               {recurrence ? (
                 <p className="mt-4 rounded-lg bg-accent/10 px-3 py-2 text-[10px] leading-relaxed text-accent-soft">
-                  Repeats pay the Medium rate. The next one is created when you tick this one.
+                  Repeats pay the Medium rate. Each scheduled day appears automatically.
                 </p>
               ) : (
                 <div className="mt-4 flex items-center gap-1.5">
@@ -395,6 +399,15 @@ export function ProjectDetail({ project, onClose }: { project: Project; onClose:
           </form>
         </div>
       </div>
+      <AddTaskSheet
+        open={editingTask !== null}
+        onClose={() => setEditingTask(null)}
+        onSubmit={(input) => {
+          if (editingTask) updateTask(editingTask.id, input);
+        }}
+        defaultProjectId={project.id}
+        task={editingTask ?? undefined}
+      />
     </div>
   );
 }
@@ -413,6 +426,7 @@ interface NodeProps {
   setAddingUnder: (id: string | null) => void;
   onAddSub: (parent: Task, title: string) => void;
   onToggle: (t: Task) => void;
+  onEdit: (task: Task) => void;
   onRecolour: (id: string, key: string | undefined) => void;
   onDelete: (id: string) => void;
 }
@@ -500,6 +514,24 @@ function Node(props: NodeProps) {
         {/* Who it belongs to. One face today; the column is what changes when
             a project can have more than one member. */}
         <Avatar emoji={owner} size={22} ring={project.color} title={ownerName} />
+
+        <button
+          type="button"
+          onClick={() => props.onEdit(task)}
+          aria-label={`Edit ${task.title}`}
+          className="grid size-5 shrink-0 place-items-center rounded-md text-ink-faint opacity-0 transition-opacity hover:bg-surface-3 hover:text-ink focus:opacity-100 group-hover:opacity-100"
+        >
+          <svg viewBox="0 0 16 16" className="size-3.5" aria-hidden="true">
+            <path
+              d="m3 11.5-.5 2 2-.5 7.6-7.6-1.5-1.5L3 11.5Zm6.5-6.5 1.5 1.5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
 
         {depth < MAX_DEPTH - 1 && (
           <button

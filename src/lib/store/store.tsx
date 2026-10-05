@@ -14,7 +14,7 @@ import {
 import { buildDemoState } from "@/lib/demo/seed";
 import { today } from "@/lib/domain/dates";
 import { levelFromTotalXp } from "@/lib/domain/level";
-import { RECURRING_PRIORITY, nextOccurrence } from "@/lib/domain/recurrence";
+import { RECURRING_PRIORITY, materializeRecurrences } from "@/lib/domain/recurrence";
 import { registerActivity } from "@/lib/domain/streak";
 import { awardForTaskCompletion, totalXp } from "@/lib/domain/xp";
 import type {
@@ -75,8 +75,6 @@ export interface CompletionResult {
   reason: "full" | "priority_limit" | "daily_cap";
   bonusXp: number;
   leveledUpTo?: number;
-  /** Set when the task repeats — the day the next copy landed on. */
-  repeatedOn?: LocalDate;
 }
 
 interface OrvanContext {
@@ -84,6 +82,7 @@ interface OrvanContext {
   ready: boolean;
   addTask: (input: NewTaskInput) => void;
   updateTask: (id: string, patch: Partial<Omit<Task, "id">>) => void;
+  ensureRecurringTasksThrough: (date: LocalDate) => void;
   completeTask: (id: string) => CompletionResult | null;
   reopenTask: (id: string) => void;
   deleteTask: (id: string) => void;
@@ -201,10 +200,53 @@ export function OrvanProvider({ children }: { children: ReactNode }) {
 
   const updateTask = useCallback(
     (id: string, patch: Partial<Omit<Task, "id">>) => {
-      update((s) => ({
-        ...s,
-        tasks: s.tasks.map((t) => (t.id === id ? { ...t, ...patch } : t)),
-      }));
+      update((s) => {
+        const target = s.tasks.find((task) => task.id === id);
+        if (!target) return s;
+
+        const nextPatch = {
+          ...patch,
+          ...(patch.title !== undefined ? { title: patch.title.trim() } : {}),
+          ...(patch.recurrence ? { priority: RECURRING_PRIORITY } : {}),
+        };
+
+        /*
+         * Content edits apply to the whole recurring series. The date remains
+         * occurrence-specific: moving Tuesday's copy must not stack every copy
+         * onto Tuesday.
+         */
+        const rootId = target.parentTaskId ?? target.id;
+        const shared = { ...nextPatch };
+        delete shared.dueDate;
+        delete shared.status;
+        delete shared.completedAt;
+        delete shared.createdAt;
+        delete shared.occurrenceDate;
+        delete shared.parentTaskId;
+        const belongsToSeries = (task: Task) =>
+          task.id === rootId || task.parentTaskId === rootId;
+
+        return {
+          ...s,
+          tasks: s.tasks.map((task) => {
+            if (task.id === id) return { ...task, ...nextPatch };
+            if ((target.recurrence || target.parentTaskId) && belongsToSeries(task)) {
+              return { ...task, ...shared };
+            }
+            return task;
+          }),
+        };
+      });
+    },
+    [update],
+  );
+
+  const ensureRecurringTasksThrough = useCallback(
+    (date: LocalDate) => {
+      update((s) => {
+        const tasks = materializeRecurrences(s.tasks, date, uid, new Date().toISOString());
+        return tasks === s.tasks ? s : { ...s, tasks };
+      });
     },
     [update],
   );
@@ -247,42 +289,15 @@ export function OrvanProvider({ children }: { children: ReactNode }) {
       const levelAfter = levelFromTotalXp(totalXp(xpEvents)).level;
       const earned = award.xp + streakUpdate.bonusXp;
 
-      /*
-       * A repeat spawns its successor on completion rather than being expanded
-       * ahead of time. Only one is ever open, so the day's list stays a list of
-       * what is actually due — and ticking it is what puts the next one there,
-       * which is the loop the streak is built on.
-       */
-      let repeatedOn: LocalDate | undefined;
-      const spawned: Task[] = [];
-      if (task.recurrence) {
-        repeatedOn = nextOccurrence(task.dueDate ?? day, task.recurrence);
-        spawned.push({
-          ...task,
-          id: uid(),
-          status: "open",
-          completedAt: undefined,
-          dueDate: repeatedOn,
-          occurrenceDate: repeatedOn,
-          // The chain points at the original, not at the copy before it, so the
-          // series survives deleting any single occurrence.
-          parentTaskId: task.parentTaskId ?? task.id,
-          createdAt: now,
-        });
-      }
-
       apply({
         ...s,
         xpEvents,
         streak: streakUpdate.streak,
         // Coins track XP 1:1 on the way in, but are spent independently.
         profile: { ...s.profile, coinsBalance: s.profile.coinsBalance + earned },
-        tasks: [
-          ...s.tasks.map((t) =>
-            t.id === id ? { ...t, status: "done" as const, completedAt: now } : t,
-          ),
-          ...spawned,
-        ],
+        tasks: s.tasks.map((t) =>
+          t.id === id ? { ...t, status: "done" as const, completedAt: now } : t,
+        ),
       });
 
       return {
@@ -290,7 +305,6 @@ export function OrvanProvider({ children }: { children: ReactNode }) {
         reason: award.reason,
         bonusXp: streakUpdate.bonusXp,
         leveledUpTo: levelAfter > levelBefore ? levelAfter : undefined,
-        repeatedOn,
       };
     },
     [apply],
@@ -319,12 +333,34 @@ export function OrvanProvider({ children }: { children: ReactNode }) {
    */
   const deleteTask = useCallback(
     (id: string) => {
-      update((s) => ({
-        ...s,
-        tasks: s.tasks
-          .filter((t) => t.id !== id)
-          .map((t) => (t.parentId === id ? { ...t, parentId: undefined } : t)),
-      }));
+      update((s) => {
+        const target = s.tasks.find((task) => task.id === id);
+        if (!target) return s;
+        // Deleting a repeated row removes its series. Otherwise the next
+        // calendar expansion would faithfully recreate the deleted occurrence.
+        const rootId = target.parentTaskId ?? target.id;
+        const recurring = Boolean(target.recurrence || target.parentTaskId);
+        const removedIds = new Set(
+          s.tasks
+            .filter((task) =>
+              recurring
+                ? task.id === rootId || task.parentTaskId === rootId
+                : task.id === id,
+            )
+            .map((task) => task.id),
+        );
+
+        return {
+          ...s,
+          tasks: s.tasks
+            .filter((task) => !removedIds.has(task.id))
+            .map((task) =>
+              task.parentId && removedIds.has(task.parentId)
+                ? { ...task, parentId: undefined }
+                : task,
+            ),
+        };
+      });
     },
     [update],
   );
@@ -459,6 +495,7 @@ export function OrvanProvider({ children }: { children: ReactNode }) {
       ready,
       addTask,
       updateTask,
+      ensureRecurringTasksThrough,
       completeTask,
       reopenTask,
       deleteTask,
@@ -479,6 +516,7 @@ export function OrvanProvider({ children }: { children: ReactNode }) {
       ready,
       addTask,
       updateTask,
+      ensureRecurringTasksThrough,
       completeTask,
       reopenTask,
       deleteTask,

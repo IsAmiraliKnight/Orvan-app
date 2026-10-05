@@ -135,7 +135,8 @@ function layout(tasks: Task[]): Placed[] {
 }
 
 export default function CalendarPage() {
-  const { state, ready, addTask, completeTask, reopenTask } = useOrvan();
+  const { state, ready, addTask, ensureRecurringTasksThrough, completeTask, reopenTask } =
+    useOrvan();
   const day = today();
 
   /**
@@ -345,6 +346,11 @@ export default function CalendarPage() {
   );
   /** Only the middle window — what "on screen" means to everything else. */
   const shown = useMemo(() => days.slice(span, span * 2), [days, span]);
+
+  useEffect(() => {
+    if (!ready) return;
+    ensureRecurringTasksThrough(days[days.length - 1]);
+  }, [ready, days, state.tasks, ensureRecurringTasksThrough]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -1081,7 +1087,7 @@ function SidePanel({
 
         {recurrence ? (
           <p className="mt-4 rounded-lg bg-accent/10 px-3 py-2 text-[10px] leading-relaxed text-accent-soft">
-            Repeats always pay the Medium rate, and the next one is created when you tick this one.
+            Repeats always pay the Medium rate. Each scheduled day appears automatically.
           </p>
         ) : (
           <div className="mt-4 flex gap-1.5">
