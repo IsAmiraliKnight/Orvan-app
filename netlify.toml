@@ -1,0 +1,9 @@
+# Both editions share the source. The public tester site always starts empty.
+[build]
+  command = "npm run build"
+  publish = "out"
+
+[build.environment]
+  NEXT_PUBLIC_ORVAN_BLANK = "1"
+  # This app exports static HTML and does not need a Next.js server adapter.
+  NETLIFY_NEXT_PLUGIN_SKIP = "true"
