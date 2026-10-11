@@ -78,17 +78,17 @@ export function materializeRecurrences(
   createdAt: string,
 ): Task[] {
   const additions: Task[] = [];
-  const roots = tasks.filter((task) => task.recurrence && !task.parentTaskId && task.dueDate);
+  const roots = tasks.filter((task) => task.recurrence && !task.parentTaskId && (task.recurrenceStartDate || task.dueDate));
 
   for (const root of roots) {
     const existingDates = new Set(
       tasks
         .filter((task) => task.id === root.id || task.parentTaskId === root.id)
-        .map((task) => task.dueDate)
+        .map((task) => task.occurrenceDate ?? task.dueDate)
         .filter((date): date is LocalDate => date !== undefined),
     );
 
-    let occurrence = root.dueDate!;
+    let occurrence = root.recurrenceStartDate ?? root.dueDate!;
     // A guard protects persisted data from ever turning a malformed recurrence
     // into an unbounded loop.
     for (let count = 0; occurrence < through && count < 10000; count += 1) {
@@ -111,4 +111,48 @@ export function materializeRecurrences(
   }
 
   return additions.length === 0 ? tasks : [...tasks, ...additions];
+}
+
+/** Keep per-occurrence dates and completion history when editing a series. */
+export function editTaskSeries(tasks: Task[], id: string, patch: Partial<Omit<Task, "id">>, day: LocalDate): Task[] {
+  const target = tasks.find((task) => task.id === id);
+  if (!target) return tasks;
+  const rootId = target.parentTaskId ?? target.id;
+  const root = tasks.find((task) => task.id === rootId) ?? target;
+  const repeating = Boolean(root.recurrence);
+  const changesSchedule = "recurrence" in patch && !sameRecurrence(root.recurrence, patch.recurrence);
+  const nextPatch = {
+    ...patch,
+    ...(patch.title !== undefined ? { title: patch.title.trim() } : {}),
+    ...((patch.recurrence ?? ("recurrence" in patch ? undefined : root.recurrence)) ? { priority: RECURRING_PRIORITY } : {}),
+    ...("dueTime" in patch && !patch.dueTime ? { durationMin: undefined } : {}),
+  };
+  const shared = { ...nextPatch };
+  delete shared.dueDate;
+  delete shared.status;
+  delete shared.completedAt;
+  delete shared.createdAt;
+  delete shared.occurrenceDate;
+  delete shared.parentTaskId;
+  delete shared.recurrenceStartDate;
+  const belongs = (task: Task) => task.id === rootId || task.parentTaskId === rootId;
+
+  return tasks
+    .filter((task) => !(changesSchedule && belongs(task) && task.id !== rootId && task.id !== id && task.status === "open" && task.dueDate && task.dueDate > day))
+    .map((task) => {
+      let next = task.id === id
+        ? { ...task, ...nextPatch }
+        : (repeating || target.parentTaskId || patch.recurrence) && belongs(task) ? { ...task, ...shared } : task;
+      if (task.id === rootId && (repeating || patch.recurrence)) {
+        next = {
+          ...next,
+          recurrenceStartDate: changesSchedule
+            ? patch.dueDate ?? day
+            : root.recurrenceStartDate ?? root.dueDate ?? patch.dueDate ?? day,
+          // Moving the root edits just that occurrence, not the series anchor.
+          occurrenceDate: task.occurrenceDate ?? task.dueDate,
+        };
+      }
+      return next;
+    });
 }

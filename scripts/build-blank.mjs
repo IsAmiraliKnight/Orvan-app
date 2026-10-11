@@ -14,7 +14,7 @@
  *   npm run build:blank
  */
 import { execFileSync } from "node:child_process";
-import { renameSync, rmSync } from "node:fs";
+import { renameSync, rmSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
@@ -24,17 +24,29 @@ const BLANK_OUT = resolve(root, "out 2");
 function build(blank) {
   rmSync(resolve(root, ".next"), { recursive: true, force: true });
   rmSync(OUT, { recursive: true, force: true });
-  execFileSync("npx", ["next", "build"], {
+  execFileSync(process.execPath, [resolve(root, "node_modules/next/dist/bin/next"), "build"], {
     cwd: root,
     stdio: "inherit",
-    shell: true,
-    env: blank ? { ...process.env, NEXT_PUBLIC_ORVAN_BLANK: "1" } : process.env,
+    env: { ...process.env, NEXT_PUBLIC_ORVAN_BLANK: blank ? "1" : "0" },
   });
 }
 
 build(true);
 rmSync(BLANK_OUT, { recursive: true, force: true });
 renameSync(OUT, BLANK_OUT);
+writeFileSync(resolve(BLANK_OUT, "START-HERE.txt"), `Orvan — tester edition
+
+This folder contains the updated app with an empty account for new users.
+Serve the entire folder with a static web server, or upload its contents to a
+static host. Open the resulting address in your browser, not index.html directly.
+
+Tasks, projects, monthly finances and settings are saved only in your browser.
+Keep using the same address and browser profile to retain your data. Replacing
+the app files at the same address preserves existing tester data. Clearing site
+data or using private browsing can remove it. Each tester has their own data.
+
+No demo tasks, projects or financial records are added to this edition.
+`, "utf8");
 
 // The showcase build is what `out` is expected to hold, so put it back rather
 // than leaving the folder missing after a run.

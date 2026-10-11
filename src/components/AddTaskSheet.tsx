@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { ColorPicker } from "@/components/ColorPicker";
-import { DatePicker, TimePicker } from "@/components/DateField";
+import { TaskScheduleFields } from "@/components/TaskScheduleFields";
 import { today } from "@/lib/domain/dates";
 import { RECURRENCES, recurrenceLabel, sameRecurrence } from "@/lib/domain/recurrence";
 import type { LocalDate, Priority, Recurrence, Task } from "@/lib/domain/types";
@@ -49,7 +49,7 @@ export function AddTaskSheet({
   const { state } = useOrvan();
   const [title, setTitle] = useState("");
   const [priority, setPriority] = useState<Priority>("medium");
-  const [dueDate, setDueDate] = useState<LocalDate>(defaultDate ?? today());
+  const [dueDate, setDueDate] = useState<LocalDate | undefined>(defaultDate ?? today());
   const [dueTime, setDueTime] = useState(defaultTime ?? "");
   const [durationMin, setDurationMin] = useState(defaultDurationMin ?? 60);
   const [recurrence, setRecurrence] = useState<Recurrence | undefined>(undefined);
@@ -66,8 +66,8 @@ export function AddTaskSheet({
     if (!open) return;
     setTitle(task?.title ?? "");
     setPriority(task?.priority ?? "medium");
-    setDueDate(task?.dueDate ?? defaultDate ?? today());
-    setDueTime(task?.dueTime ?? defaultTime ?? "");
+    setDueDate(task ? task.dueDate : defaultDate ?? today());
+    setDueTime(task ? task.dueTime ?? "" : defaultTime ?? "");
     setDurationMin(task?.durationMin ?? defaultDurationMin ?? 60);
     setRecurrence(task?.recurrence);
     setColorKey(task?.colorKey);
@@ -96,7 +96,7 @@ export function AddTaskSheet({
       priority,
       dueDate,
       dueTime: dueTime || undefined,
-      durationMin,
+      durationMin: dueTime ? durationMin : undefined,
       colorKey,
       projectId,
       recurrence,
@@ -133,10 +133,7 @@ export function AddTaskSheet({
         />
 
         <p className="mb-2 mt-4 text-xs text-ink-dim">When</p>
-        <div className="flex gap-2">
-          <DatePicker value={dueDate} onChange={setDueDate} />
-          <TimePicker value={dueTime} onChange={setDueTime} />
-        </div>
+        <TaskScheduleFields date={dueDate} time={dueTime} onDate={setDueDate} onTime={setDueTime} repeating={repeating} />
 
         {/* Duration is only a question once there is a start. An "anytime"
             task has nothing to be long. */}
@@ -168,7 +165,10 @@ export function AddTaskSheet({
               key={label}
               label={label}
               on={sameRecurrence(recurrence, r)}
-              onClick={() => setRecurrence(r)}
+              onClick={() => {
+                setRecurrence(r);
+                if (r && !dueDate) setDueDate(today());
+              }}
             />
           ))}
         </div>

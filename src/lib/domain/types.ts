@@ -26,6 +26,8 @@ export interface Task {
   parentTaskId?: string;
   occurrenceDate?: LocalDate;
   recurrence?: Recurrence;
+  /** Series anchor, kept separate from an individual occurrence's due date. */
+  recurrenceStartDate?: LocalDate;
 }
 
 export type Recurrence =
@@ -92,6 +94,8 @@ export interface Transaction {
 export interface Budget {
   category: string;
   limit: number;
+  /** YYYY-MM. Older saved budgets are assigned a month on restoration. */
+  month?: string;
 }
 
 /** The long-horizon things the dashboards are supposed to be in service of. */

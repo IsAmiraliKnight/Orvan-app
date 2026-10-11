@@ -6,6 +6,8 @@ import { ProjectDetail } from "@/components/ProjectDetail";
 import { TopBar } from "@/components/TopBar";
 import { Ring } from "@/components/ui";
 import { swatch } from "@/lib/domain/palette";
+import { toLocalDate } from "@/lib/domain/dates";
+import { isOverdue } from "@/lib/domain/tasks";
 import type { Project, Task } from "@/lib/domain/types";
 import { useOrvan } from "@/lib/store/store";
 
@@ -159,10 +161,14 @@ function ProjectCard({
   tasks: Task[];
   onOpen: () => void;
 }) {
-  const mine = tasks.filter((t) => t.projectId === project.id);
+  const { now } = useOrvan();
+  const day = toLocalDate(now);
+  const mine = tasks.filter((t) => t.projectId === project.id && (!t.dueDate || t.dueDate <= day));
+  const overdue = mine.filter((t) => isOverdue(t, now)).length;
   const done = mine.filter((t) => t.status === "done").length;
   const pct = mine.length === 0 ? 0 : done / mine.length;
-  const open = mine.filter((t) => t.status === "open").slice(0, 3);
+  const open = mine.filter((t) => t.status === "open")
+    .sort((a, b) => Number(isOverdue(b, now)) - Number(isOverdue(a, now))).slice(0, 3);
 
   // The whole card is the target. A separate "open" affordance would be a
   // second thing to find on a surface that only does one thing.
@@ -182,7 +188,7 @@ function ProjectCard({
         <span className="min-w-0">
           <span className="block truncate text-base font-semibold">{project.name}</span>
           <span className="mt-1 block text-xs text-ink-faint tabular-nums">
-            {done}/{mine.length} tasks
+            {done}/{mine.length} due so far{overdue > 0 && <span className="ms-2 text-p-high">{overdue} overdue</span>}
           </span>
         </span>
         <Ring pct={pct} size={56} stroke={5} color={project.color}>

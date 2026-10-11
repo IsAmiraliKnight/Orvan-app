@@ -4,12 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 
 import { AddTaskSheet } from "@/components/AddTaskSheet";
 import { ColorPicker } from "@/components/ColorPicker";
-import { DatePicker, TimePicker, relativeLabel } from "@/components/DateField";
+import { DatePicker, relativeLabel } from "@/components/DateField";
+import { TaskScheduleFields } from "@/components/TaskScheduleFields";
 import { Avatar, Bar, RepeatGlyph, Ring } from "@/components/ui";
-import { today } from "@/lib/domain/dates";
+import { addDays, startOfWeek, toLocalDate, today } from "@/lib/domain/dates";
+import { isOverdue } from "@/lib/domain/tasks";
 import { swatch, tint } from "@/lib/domain/palette";
 import { RECURRENCES, sameRecurrence } from "@/lib/domain/recurrence";
-import type { Priority, Project, Recurrence, Task } from "@/lib/domain/types";
+import type { LocalDate, Priority, Project, Recurrence, Task } from "@/lib/domain/types";
 import { useOrvan } from "@/lib/store/store";
 
 const PRIORITIES: Priority[] = ["high", "medium", "low"];
@@ -28,15 +30,23 @@ const MAX_DEPTH = 3;
  * is context rather than something to keep working in.
  */
 export function ProjectDetail({ project, onClose }: { project: Project; onClose: () => void }) {
-  const { state, addTask, updateTask, completeTask, reopenTask, deleteTask, updateProject } =
+  const { state, ready, now, addTask, updateTask, ensureRecurringTasksThrough, completeTask, reopenTask, deleteTask, updateProject } =
     useOrvan();
+  const day = toLocalDate(now);
+  const [week, setWeek] = useState(() => startOfWeek(day));
+  const [scope, setScope] = useState<"week" | "all" | "overdue">("week");
+  const end = addDays(week, 6);
+
+  useEffect(() => {
+    if (ready) ensureRecurringTasksThrough(end);
+  }, [ready, end, ensureRecurringTasksThrough]);
 
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(project.name);
 
   const [title, setTitle] = useState("");
   const [priority, setPriority] = useState<Priority>("medium");
-  const [dueDate, setDueDate] = useState(today());
+  const [dueDate, setDueDate] = useState<LocalDate | undefined>(day);
   const [dueTime, setDueTime] = useState("");
   const [recurrence, setRecurrence] = useState<Recurrence | undefined>(undefined);
   const [colorKey, setColorKey] = useState<string | undefined>(undefined);
@@ -64,10 +74,23 @@ export function ProjectDetail({ project, onClose }: { project: Project; onClose:
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose, renaming, editingTask]);
 
-  const tasks = useMemo(
-    () => state.tasks.filter((t) => t.projectId === project.id),
-    [state.tasks, project.id],
-  );
+  const tasks = useMemo(() => {
+    const mine = state.tasks.filter((t) => t.projectId === project.id);
+    const visible = mine.filter((t) => scope === "all" || (scope === "overdue" ? isOverdue(t, now) :
+      !t.dueDate || (t.dueDate >= week && t.dueDate <= end) || (week === startOfWeek(day) && isOverdue(t, now))));
+    const ids = new Set(visible.map((t) => t.id));
+    // Keep ancestors of visible sub-tasks in the outline.
+    for (const task of visible) {
+      let parent = task.parentId;
+      while (parent && !ids.has(parent)) {
+        const ancestor = mine.find((t) => t.id === parent);
+        if (!ancestor) break;
+        ids.add(ancestor.id);
+        parent = ancestor.parentId;
+      }
+    }
+    return mine.filter((t) => ids.has(t.id));
+  }, [state.tasks, project.id, scope, week, end, day, now]);
 
   /*
    * The outline. A `parentId` pointing outside this project — the parent was
@@ -91,12 +114,13 @@ export function ProjectDetail({ project, onClose }: { project: Project; onClose:
       [...list].sort(
         (a, b) =>
           Number(a.status === "done") - Number(b.status === "done") ||
-          a.createdAt.localeCompare(b.createdAt),
+          Number(isOverdue(b, now)) - Number(isOverdue(a, now)) ||
+          (a.dueDate ?? "9999").localeCompare(b.dueDate ?? "9999") || a.createdAt.localeCompare(b.createdAt),
       );
 
     for (const [id, list] of kids) kids.set(id, order(list));
     return { roots: order(top), children: kids };
-  }, [tasks]);
+  }, [tasks, now]);
 
   const done = tasks.filter((t) => t.status === "done");
   const open = tasks.filter((t) => t.status === "open");
@@ -256,10 +280,22 @@ export function ProjectDetail({ project, onClose }: { project: Project; onClose:
             <h3 className="mb-2 text-[11px] font-medium uppercase tracking-widest text-ink-faint">
               Outline
             </h3>
+            <div className="mb-4 flex flex-wrap items-center gap-2">
+              <select value={scope} onChange={(e) => setScope(e.target.value as typeof scope)} aria-label="Project task view"
+                className="rounded-lg border border-line bg-surface px-2 py-2 text-xs text-ink-dim">
+                <option value="week">This week</option><option value="overdue">Overdue</option><option value="all">All tasks</option>
+              </select>
+              {scope === "week" && <>
+                <button type="button" onClick={() => setWeek(addDays(week, -7))} aria-label="Previous project week" className="rounded-lg border border-line px-2 py-1.5">‹</button>
+                <div className="w-32"><DatePicker value={week} onChange={(d) => setWeek(startOfWeek(d))} label="Project week" /></div>
+                <button type="button" onClick={() => setWeek(addDays(week, 7))} aria-label="Next project week" className="rounded-lg border border-line px-2 py-1.5">›</button>
+                <button type="button" onClick={() => setWeek(startOfWeek(day))} className="text-[11px] text-accent-soft">Today</button>
+              </>}
+            </div>
 
             {roots.length === 0 ? (
               <p className="rounded-xl border border-dashed border-line py-10 text-center text-sm text-ink-faint">
-                No tasks yet. Add the first one, then break it down.
+                No tasks in this view. Add one or choose another week.
               </p>
             ) : (
               <ul className="flex flex-col">
@@ -332,16 +368,15 @@ export function ProjectDetail({ project, onClose }: { project: Project; onClose:
                 options are not just hidden, they are unknowable. */}
             {!options && (
               <p className="mt-2 text-[11px] text-ink-faint lg:hidden">
-                {relativeLabel(dueDate)}
-                {dueTime ? ` · ${dueTime}` : ""}
+                {dueDate ? relativeLabel(dueDate) : "No date"}
+                {dueTime ? ` · ${dueTime}` : dueDate ? " · no time" : ""}
                 {recurrence ? " · repeats" : ` · ${priority}`}
               </p>
             )}
 
             <div id="new-task-options" className={options ? "" : "hidden lg:block"}>
-              <div className="mt-3 flex gap-2">
-                <DatePicker value={dueDate} onChange={setDueDate} />
-                <TimePicker value={dueTime} onChange={setDueTime} />
+              <div className="mt-3">
+                <TaskScheduleFields date={dueDate} time={dueTime} onDate={setDueDate} onTime={setDueTime} repeating={Boolean(recurrence)} />
               </div>
 
               <div className="mt-3 flex flex-wrap gap-1.5">
@@ -349,7 +384,10 @@ export function ProjectDetail({ project, onClose }: { project: Project; onClose:
                   <button
                     key={label}
                     type="button"
-                    onClick={() => setRecurrence(r)}
+                    onClick={() => {
+                      setRecurrence(r);
+                      if (r && !dueDate) setDueDate(today());
+                    }}
                     className={`rounded-full px-2.5 py-1 text-[10px] transition-colors ${
                       sameRecurrence(recurrence, r)
                         ? "bg-accent text-on-accent"
@@ -432,6 +470,7 @@ interface NodeProps {
 }
 
 function Node(props: NodeProps) {
+  const { now } = useOrvan();
   const { task, depth, children_, project, owner, ownerName, addingUnder, setAddingUnder } = props;
   const [editing, setEditing] = useState(false);
   const [sub, setSub] = useState("");
@@ -440,6 +479,7 @@ function Node(props: NodeProps) {
   const kidsDone = kids.filter((k) => k.status === "done").length;
   const category = swatch(task.colorKey);
   const done = task.status === "done";
+  const overdue = isOverdue(task, now);
   const adding = addingUnder === task.id;
 
   return (
@@ -490,6 +530,8 @@ function Node(props: NodeProps) {
               {task.title}
             </span>
           </span>
+          {overdue && <span className="mt-1 text-[10px] text-p-high">Overdue · {relativeLabel(task.dueDate!)}{task.dueTime ? ` · ${task.dueTime}` : ""}</span>}
+          {!task.dueDate && <span className="mt-1 text-[10px] text-ink-faint">No date</span>}
           {/* A parent's own progress, which is what makes the indent worth
               having rather than just being decoration. */}
           {kids.length > 0 && (
@@ -504,7 +546,7 @@ function Node(props: NodeProps) {
           )}
         </span>
 
-        {task.dueDate && (
+        {task.dueDate && !overdue && (
           <span className="hidden shrink-0 text-[11px] text-ink-faint sm:block">
             {relativeLabel(task.dueDate)}
             {task.dueTime ? ` · ${task.dueTime}` : ""}

@@ -4,12 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AddTaskSheet } from "@/components/AddTaskSheet";
 import { ColorPicker } from "@/components/ColorPicker";
-import { DatePicker, TimePicker, relativeLabel } from "@/components/DateField";
+import { relativeLabel } from "@/components/DateField";
+import { TaskScheduleFields } from "@/components/TaskScheduleFields";
 import { TopBar } from "@/components/TopBar";
 import { RepeatGlyph } from "@/components/ui";
-import { addDays, parseLocalDate, today } from "@/lib/domain/dates";
+import { addDays, addMonths, monthGridDays, parseLocalDate, startOfWeek, toLocalDate } from "@/lib/domain/dates";
 import { swatch, tint } from "@/lib/domain/palette";
 import { RECURRENCES, sameRecurrence } from "@/lib/domain/recurrence";
+import { isOverdue, matchesTaskFilter, type TaskFilter } from "@/lib/domain/tasks";
 import type { LocalDate, Priority, Project, Recurrence, Task } from "@/lib/domain/types";
 import { useOrvan, type NewTaskInput } from "@/lib/store/store";
 
@@ -135,22 +137,27 @@ function layout(tasks: Task[]): Placed[] {
 }
 
 export default function CalendarPage() {
-  const { state, ready, addTask, ensureRecurringTasksThrough, completeTask, reopenTask } =
+  const { state, ready, now, addTask, ensureRecurringTasksThrough, completeTask, reopenTask } =
     useOrvan();
-  const day = today();
+  const day = toLocalDate(now);
 
   /**
    * The leftmost column, not the start of the calendar week. Opening on
    * Monday when it is Thursday buries today in the middle of the grid and
    * spends three columns on days that are already gone.
    */
-  const [anchor, setAnchor] = useState<LocalDate>(day);
+  const [anchor, setAnchor] = useState<LocalDate>(() => startOfWeek(day));
   const [span, setSpan] = useState<Span>(7);
+  const [monthView, setMonthView] = useState(false);
   const [selected, setSelected] = useState<LocalDate>(day);
   const [panelOpen, setPanelOpen] = useState(true);
   const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<TaskFilter>("all");
+  const [projectFilter, setProjectFilter] = useState("all");
+  const [priorityFilter, setPriorityFilter] = useState("all");
 
   const timeline = useRef<HTMLDivElement>(null);
+  const selectedDayPanel = useRef<HTMLDivElement>(null);
   /** Measured on the client; null means "let the stylesheet decide". */
   const [gridHeight, setGridHeight] = useState<number | null>(null);
   /**
@@ -199,6 +206,14 @@ export default function CalendarPage() {
 
   const slideTo = useCallback(
     (dir: -1 | 0 | 1) => {
+      if (monthView) {
+        if (dir) {
+          const next = addMonths(anchor, dir);
+          setAnchor(next);
+          setSelected(next);
+        }
+        return;
+      }
       window.clearTimeout(landing.current);
       setGliding(true);
       setSlide(dir === 0 ? 0 : -dir * windowWidth());
@@ -209,9 +224,10 @@ export default function CalendarPage() {
         setGliding(false);
         setSlide(0);
         setAnchor((a) => addDays(a, dir * span));
+        setSelected(addDays(anchor, dir * span));
       }, GLIDE_MS);
     },
-    [span, windowWidth],
+    [span, monthView, anchor, windowWidth],
   );
 
   useEffect(() => () => window.clearTimeout(landing.current), []);
@@ -225,7 +241,10 @@ export default function CalendarPage() {
    */
   useEffect(() => {
     const w = window.innerWidth;
-    if (w < 1024) setSpan(3);
+    if (w < 1024) {
+      setSpan(3);
+      setAnchor(toLocalDate(new Date()));
+    }
     // Only below `md`, where the panel is a drawer over the grid rather than a
     // column beside it. A phone held sideways is ~844px: wide enough to dock,
     // and it is exactly the case where the space would otherwise sit empty.
@@ -276,7 +295,7 @@ export default function CalendarPage() {
       observer.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [ready]);
+  }, [ready, monthView]);
 
   /*
    * A 24-hour grid is 1248px tall; landing at midnight would show an empty
@@ -295,7 +314,7 @@ export default function CalendarPage() {
     // on arrival would read as the page still loading.
     el.scrollTo({ top: Math.max(0, (new Date().getHours() - 1) * ROW_H), behavior: "instant" });
     homed.current = true;
-  }, [ready, gridHeight]);
+  }, [ready, gridHeight, monthView]);
 
   /*
    * A two-finger sideways swipe on a trackpad drags the same carousel the
@@ -337,15 +356,15 @@ export default function CalendarPage() {
       el.removeEventListener("wheel", onWheel);
       window.clearTimeout(idle);
     };
-  }, [ready, commitAt, slideTo, windowWidth]);
+  }, [ready, monthView, commitAt, slideTo, windowWidth]);
 
   /** Every rendered day: the window before, the one on screen, the one after. */
   const days = useMemo(
-    () => Array.from({ length: span * 3 }, (_, i) => addDays(anchor, i - span)),
-    [anchor, span],
+    () => monthView ? monthGridDays(anchor) : Array.from({ length: span * 3 }, (_, i) => addDays(anchor, i - span)),
+    [anchor, span, monthView],
   );
   /** Only the middle window — what "on screen" means to everything else. */
-  const shown = useMemo(() => days.slice(span, span * 2), [days, span]);
+  const shown = useMemo(() => monthView ? days : days.slice(span, span * 2), [days, span, monthView]);
 
   useEffect(() => {
     if (!ready) return;
@@ -354,8 +373,13 @@ export default function CalendarPage() {
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return state.tasks.filter((t) => !q || t.title.toLowerCase().includes(q));
-  }, [state.tasks, query]);
+    return state.tasks.filter((t) => (!q || t.title.toLowerCase().includes(q)) &&
+      matchesTaskFilter(t, statusFilter, now) &&
+      (projectFilter === "all" || (projectFilter === "none" ? !t.projectId : t.projectId === projectFilter)) &&
+      (priorityFilter === "all" || t.priority === priorityFilter));
+  }, [state.tasks, query, statusFilter, projectFilter, priorityFilter, now]);
+  const overdueTasks = visible.filter((t) => isOverdue(t, now));
+  const noDateTasks = visible.filter((t) => !t.dueDate);
 
   const byDay = useMemo(() => {
     const map = new Map<LocalDate, { timed: Task[]; anytime: Task[] }>();
@@ -458,7 +482,12 @@ export default function CalendarPage() {
     setSelected(d);
     // Keep the chosen day on screen without dragging today off the left edge
     // when it is already visible.
-    if (!shown.includes(d)) setAnchor(d);
+    if (!shown.includes(d)) setAnchor(span === 7 && !monthView ? startOfWeek(d) : d);
+  }
+
+  function selectMonthDay(d: LocalDate) {
+    setSelected(d);
+    selectedDayPanel.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
   if (!ready) return <div className="flex-1 animate-pulse bg-bg" aria-label="Loading" />;
@@ -473,41 +502,42 @@ export default function CalendarPage() {
           <div className="flex items-center gap-1.5">
             {/* Glides rather than cuts, so the arrows and the swipe are the
                 same movement seen twice. */}
-            <StepButton label={`Back ${span} days`} onClick={() => slideTo(-1)}>
+            <StepButton label={monthView ? "Previous month" : `Back ${span} days`} onClick={() => slideTo(-1)}>
               ‹
             </StepButton>
             <button
               type="button"
               onClick={() => {
-                setAnchor(day);
+                setAnchor(span === 7 && !monthView ? startOfWeek(day) : day);
                 setSelected(day);
               }}
               className="rounded-lg border border-line px-3 py-1.5 text-xs text-ink-dim transition-colors hover:text-ink"
             >
               Today
             </button>
-            <StepButton label={`Forward ${span} days`} onClick={() => slideTo(1)}>
+            <StepButton label={monthView ? "Next month" : `Forward ${span} days`} onClick={() => slideTo(1)}>
               ›
             </StepButton>
 
-            {/* Hidden on the narrowest screens: the window is already forced. */}
-            <div className="ms-1 hidden rounded-lg border border-line p-0.5 sm:flex">
-              {SPANS.map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => setSpan(value)}
-                  aria-pressed={span === value}
-                  className={`rounded-[6px] px-2 py-1 text-[11px] transition-colors ${
-                    span === value
-                      ? "bg-accent font-medium text-on-accent"
-                      : "text-ink-dim hover:text-ink"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            <select value={monthView ? "month" : String(span)} aria-label="Calendar view"
+              onChange={(e) => {
+                window.clearTimeout(landing.current);
+                setSlide(0);
+                setGliding(false);
+                setMonthView(e.target.value === "month");
+                if (e.target.value !== "month") {
+                  const value = Number(e.target.value) as Span;
+                  setSpan(value);
+                  setAnchor(value === 7 ? startOfWeek(selected) : selected);
+                }
+                homed.current = false;
+              }}
+              className="ms-1 rounded-lg border border-line bg-surface px-2 py-1.5 text-xs text-ink-dim">
+              {SPANS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              <option value="month">Month</option>
+            </select>
+            <button type="button" onClick={() => setDraft({ date: selected, time: "", minutes: DEFAULT_MIN })}
+              className="rounded-lg bg-accent px-2.5 py-1.5 text-xs font-medium text-on-accent">+ Task</button>
 
             <button
               type="button"
@@ -543,10 +573,63 @@ export default function CalendarPage() {
         space that is left and does its own scrolling inside. From `md` up the
         panel sits beside it and the old top-aligned row layout is right again.
       */}
-      <div className="mx-auto flex w-full max-w-[100rem] min-h-0 flex-1 flex-col gap-4 px-4 py-4 sm:px-6 sm:py-6 md:flex-row md:items-start lg:gap-5">
+      <div className="mx-auto flex w-full max-w-[100rem] min-h-0 flex-1 flex-col gap-4 px-4 py-4 sm:px-6 sm:py-6">
+        <div className="flex flex-wrap items-center gap-2" aria-label="Calendar filters">
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search tasks" aria-label="Search calendar tasks"
+            className="w-full rounded-lg border border-line bg-surface px-3 py-2 text-xs outline-none focus:border-accent sm:w-44" />
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as TaskFilter)} aria-label="Calendar status filter" className="rounded-lg border border-line bg-surface px-2 py-2 text-xs">
+            <option value="all">All statuses</option><option value="open">Open</option><option value="done">Done</option><option value="overdue">Overdue</option>
+          </select>
+          <select value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)} aria-label="Calendar project filter" className="max-w-44 rounded-lg border border-line bg-surface px-2 py-2 text-xs">
+            <option value="all">All projects</option><option value="none">No project</option>
+            {state.projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} aria-label="Calendar priority filter" className="rounded-lg border border-line bg-surface px-2 py-2 text-xs">
+            <option value="all">All priorities</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
+          </select>
+          {(query || statusFilter !== "all" || projectFilter !== "all" || priorityFilter !== "all") &&
+            <button type="button" onClick={() => { setQuery(""); setStatusFilter("all"); setProjectFilter("all"); setPriorityFilter("all"); }} className="px-2 text-xs text-accent-soft">Clear filters</button>}
+        </div>
+        {overdueTasks.length > 0 && <details className="rounded-xl border border-p-high/25 bg-surface px-3 py-2">
+          <summary className="cursor-pointer text-xs text-p-high">Overdue · {overdueTasks.length}</summary>
+          <div className="mt-2 grid max-h-44 gap-1 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3">{overdueTasks.map((t) => <Chip key={t.id} task={t} projects={state.projects} onToggle={toggle} />)}</div>
+        </details>}
+        {noDateTasks.length > 0 && <details className="rounded-xl border border-line bg-surface px-3 py-2">
+          <summary className="cursor-pointer text-xs text-ink-dim">No date · {noDateTasks.length}</summary>
+          <div className="mt-2 grid max-h-44 gap-1 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3">{noDateTasks.map((t) => <Chip key={t.id} task={t} projects={state.projects} onToggle={toggle} />)}</div>
+        </details>}
+        <div className="flex min-h-0 flex-col gap-4 md:flex-row md:items-start lg:gap-5">
         {/* `flex-1` only in the row layout — in the mobile column it would
             stretch the card past the grid and put the empty space back. */}
         <section className="flex w-full flex-col overflow-hidden rounded-2xl border border-line bg-surface md:min-w-0 md:flex-1">
+          {monthView ? <>
+            <div className="grid grid-cols-7 border-b border-line">
+              {WEEKDAY.map((label) => <span key={label} className="py-2 text-center text-[10px] text-ink-faint">{label}</span>)}
+            </div>
+            <div className="grid grid-cols-7">
+              {days.map((d) => {
+                const tasks = [...(byDay.get(d)?.anytime ?? []), ...(byDay.get(d)?.timed ?? [])];
+                const inMonth = d.slice(0, 7) === anchor.slice(0, 7);
+                return <div key={d} className={`min-h-20 min-w-0 border-b border-s border-line p-1 sm:min-h-32 sm:p-2 ${selected === d ? "bg-accent/10" : !inMonth ? "bg-surface-2/40" : ""}`}>
+                  <button type="button" onClick={() => selectMonthDay(d)} aria-label={`Select ${d}`} aria-pressed={selected === d}
+                    className={`mb-1 grid size-6 place-items-center rounded-full text-xs tabular-nums ${d === day ? "bg-accent text-on-accent" : inMonth ? "text-ink" : "text-ink-faint"}`}>{parseLocalDate(d).getDate()}</button>
+                  {tasks.length > 0 && <button type="button" onClick={() => selectMonthDay(d)} aria-label={`Show ${tasks.length} tasks on ${d}`}
+                    className={`block w-full rounded-md py-1 text-[9px] sm:hidden ${tasks.some((t) => isOverdue(t, now)) ? "bg-p-high/10 text-p-high" : "bg-accent/10 text-accent-soft"}`}>{tasks.length} task{tasks.length === 1 ? "" : "s"}</button>}
+                  <div className="hidden flex-col gap-1 sm:flex">
+                    {tasks.slice(0, 3).map((t) => <Chip key={t.id} task={t} projects={state.projects} onToggle={toggle} />)}
+                    {tasks.length > 3 && <button type="button" onClick={() => selectMonthDay(d)} className="text-start text-[10px] text-accent-soft">+{tasks.length - 3} more</button>}
+                  </div>
+                </div>;
+              })}
+            </div>
+            <div ref={selectedDayPanel} className="scroll-mb-24 border-t border-line p-3">
+              <h2 className="mb-2 text-xs font-medium">{relativeLabel(selected, day)} · {selected}</h2>
+              <div className="grid max-h-56 gap-1 overflow-y-auto sm:grid-cols-2">
+                {[...(byDay.get(selected)?.anytime ?? []), ...(byDay.get(selected)?.timed ?? [])].map((t) => <Chip key={t.id} task={t} projects={state.projects} onToggle={toggle} />)}
+              </div>
+              {!byDay.get(selected)?.timed.length && !byDay.get(selected)?.anytime.length && <p className="text-xs text-ink-faint">No tasks match this day.</p>}
+            </div>
+          </> : <>
           <div
             className="flex shrink-0 overflow-hidden border-b border-line"
             style={{ paddingInlineEnd: scrollbar }}
@@ -605,7 +688,7 @@ export default function CalendarPage() {
               className="shrink-0 py-2 pe-2 text-end text-[10px] uppercase tracking-wider text-ink-faint"
               style={{ width: GUTTER }}
             >
-              any
+              no time
             </span>
             <Track span={span} slide={slide} gliding={gliding}>
               {(w) =>
@@ -716,6 +799,7 @@ export default function CalendarPage() {
               }
             </Track>
           </div>
+          </>}
         </section>
 
         {panelOpen && (
@@ -739,6 +823,7 @@ export default function CalendarPage() {
             />
           </>
         )}
+        </div>
       </div>
 
       {/* The composer the drawn slot hands off to — same sheet as everywhere
@@ -874,8 +959,10 @@ function Event({
   onToggle: (t: Task) => void;
 }) {
   const { task, top, height, lane, lanes } = placed;
+  const { now } = useOrvan();
   const color = eventColor(task, projects);
   const done = task.status === "done";
+  const overdue = isOverdue(task, now);
   const ends = clockOf(minutesOf(task.dueTime!) + (task.durationMin ?? DEFAULT_MIN));
 
   return (
@@ -884,7 +971,8 @@ function Event({
       onClick={() => onToggle(task)}
       // Without this the press would also start drawing a new slot underneath.
       onPointerDown={(e) => e.stopPropagation()}
-      title={done ? `Reopen ${task.title}` : `Complete ${task.title}`}
+      title={`${done ? "Reopen" : "Complete"} ${task.title}${overdue ? " · Overdue" : ""}`}
+      aria-label={`${done ? "Reopen" : "Complete"} ${task.title} · ${task.dueDate} ${task.dueTime}${overdue ? " · Overdue" : ""}`}
       className={`absolute overflow-hidden rounded-lg border p-1.5 text-start shadow-lg shadow-shade/15 transition-transform hover:-translate-y-0.5 ${
         done ? "opacity-45" : ""
       }`}
@@ -903,7 +991,7 @@ function Event({
         // The iOS Calendar read: a wash of the category colour with a saturated
         // spine, rather than a neutral card with a colour dot on it.
         background: tint(color, 18),
-        borderColor: tint(color, 42),
+        borderColor: overdue ? "var(--color-p-high)" : tint(color, 42),
       }}
     >
       <span
@@ -926,6 +1014,7 @@ function Event({
           {task.dueTime} – {ends}
         </span>
       )}
+      {overdue && height >= 52 && <span className="ms-1.5 block text-[9px] text-p-high">Overdue</span>}
     </button>
   );
 }
@@ -939,12 +1028,16 @@ function Chip({
   projects: Project[];
   onToggle: (t: Task) => void;
 }) {
+  const { now } = useOrvan();
   const color = eventColor(task, projects);
   const done = task.status === "done";
+  const overdue = isOverdue(task, now);
   return (
     <button
       type="button"
       onClick={() => onToggle(task)}
+      title={`${task.title} · ${task.dueDate ?? "No date"}${task.dueTime ? ` ${task.dueTime}` : ""}${overdue ? " · Overdue" : ""}`}
+      aria-label={`${done ? "Reopen" : "Complete"} ${task.title} · ${task.dueDate ?? "No date"}${overdue ? " · Overdue" : ""}`}
       className={`flex min-w-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-start transition-opacity hover:opacity-80 ${
         done ? "opacity-45" : ""
       }`}
@@ -955,7 +1048,8 @@ function Chip({
         style={{ background: color }}
         aria-hidden="true"
       />
-      <span className={`truncate text-[10px] ${done ? "line-through" : ""}`}>{task.title}</span>
+      <span className={`min-w-0 flex-1 truncate text-[10px] ${done ? "line-through" : ""}`}>{task.dueTime ? `${task.dueTime} ` : ""}{task.title}</span>
+      {overdue && <span className="shrink-0 text-[9px] text-p-high" title="Overdue">!</span>}
     </button>
   );
 }
@@ -983,6 +1077,7 @@ function SidePanel({
 }) {
   const [title, setTitle] = useState("");
   const [time, setTime] = useState("");
+  const [noDate, setNoDate] = useState(false);
   const [priority, setPriority] = useState<Priority>("medium");
   const [recurrence, setRecurrence] = useState<Recurrence | undefined>(undefined);
   const [colorKey, setColorKey] = useState<string | undefined>(undefined);
@@ -996,7 +1091,7 @@ function SidePanel({
     onAdd({
       title,
       priority,
-      dueDate: selected,
+      dueDate: noDate ? undefined : selected,
       dueTime: time || undefined,
       durationMin: DEFAULT_MIN,
       colorKey,
@@ -1040,7 +1135,7 @@ function SidePanel({
 
       <form onSubmit={submit} className="rounded-xl border border-line bg-surface p-4">
         <p className="mb-3 text-sm font-medium">
-          Add to <span className="text-accent-soft">{relativeLabel(selected)}</span>
+          Add to <span className="text-accent-soft">{noDate ? "No date" : relativeLabel(selected)}</span>
         </p>
 
         <input
@@ -1051,9 +1146,9 @@ function SidePanel({
           className="w-full border-b border-line bg-transparent pb-2 text-sm outline-none placeholder:text-ink-faint focus:border-accent"
         />
 
-        <div className="mt-3 flex gap-2">
-          <DatePicker value={selected} onChange={onSelect} markedDates={busyDays} />
-          <TimePicker value={time} onChange={setTime} />
+        <div className="mt-3">
+          <TaskScheduleFields date={noDate ? undefined : selected} time={time} onTime={setTime} repeating={Boolean(recurrence)} markedDates={busyDays}
+            onDate={(d) => { setNoDate(!d); if (d) onSelect(d); }} />
         </div>
 
         <div className="mt-3 flex flex-wrap gap-1.5">
@@ -1062,7 +1157,7 @@ function SidePanel({
               key={label}
               label={label === "Never" ? "Once" : label}
               on={sameRecurrence(recurrence, r)}
-              onClick={() => setRecurrence(r)}
+              onClick={() => { setRecurrence(r); if (r) setNoDate(false); }}
             />
           ))}
         </div>

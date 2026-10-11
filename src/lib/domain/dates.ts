@@ -35,6 +35,29 @@ export function startOfWeek(date: LocalDate): LocalDate {
   return addDays(date, -offset);
 }
 
+export function startOfMonth(date: LocalDate): LocalDate {
+  return `${date.slice(0, 7)}-01`;
+}
+
+export function addMonths(date: LocalDate, months: number): LocalDate {
+  const d = parseLocalDate(startOfMonth(date));
+  d.setMonth(d.getMonth() + months);
+  return toLocalDate(d);
+}
+
+export function monthDays(date: LocalDate): LocalDate[] {
+  const start = startOfMonth(date);
+  const count = daysBetween(start, addMonths(start, 1));
+  return Array.from({ length: count }, (_, i) => addDays(start, i));
+}
+
+/** Full Monday-to-Sunday rows, including the adjoining month's days. */
+export function monthGridDays(date: LocalDate): LocalDate[] {
+  const start = startOfWeek(startOfMonth(date));
+  const end = addDays(startOfWeek(addDays(addMonths(date, 1), -1)), 6);
+  return Array.from({ length: daysBetween(start, end) + 1 }, (_, i) => addDays(start, i));
+}
+
 export function formatDayLabel(date: LocalDate, now: LocalDate = today()): string {
   if (date === now) return "Today";
   if (date === addDays(now, 1)) return "Tomorrow";

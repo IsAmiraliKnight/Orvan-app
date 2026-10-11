@@ -5,41 +5,56 @@ import { useMemo, useState } from "react";
 import { DatePicker, relativeLabel } from "@/components/DateField";
 import { TopBar } from "@/components/TopBar";
 import { Bar, Card } from "@/components/ui";
-import { today } from "@/lib/domain/dates";
+import { addMonths, parseLocalDate, startOfMonth, toLocalDate } from "@/lib/domain/dates";
 import {
   CATEGORIES,
   CURRENCY,
   categoryIcon,
   categoryTotals,
+  budgetsForMonth,
   compact,
   full,
   summarise,
-  weekSpending,
+  monthSpending,
+  monthTransactions,
 } from "@/lib/domain/finance";
 import { useOrvan } from "@/lib/store/store";
 
 export default function FinancePage() {
-  const { state, ready, addTransaction, deleteTransaction, setBudget } = useOrvan();
+  const { state, ready, now, addTransaction, deleteTransaction, setBudget } = useOrvan();
   const [formOpen, setFormOpen] = useState(false);
 
-  const day = today();
+  const day = toLocalDate(now);
+  const [month, setMonth] = useState(() => startOfMonth(day));
+  const [page, setPage] = useState(0);
+  const currentMonth = month === startOfMonth(day);
   const tx = state.transactions;
+  const monthTx = useMemo(() => monthTransactions(tx, month), [tx, month]);
+  const monthLabel = parseLocalDate(month).toLocaleDateString("en-US", { month: "long", year: "numeric" });
 
-  const summary = useMemo(() => summarise(tx, day), [tx, day]);
-  const week = useMemo(() => weekSpending(tx, day), [tx, day]);
+  const summary = useMemo(() => summarise(tx, currentMonth ? day : month), [tx, day, month, currentMonth]);
+  const points = useMemo(() => monthSpending(tx, month), [tx, month]);
   const categories = useMemo(
-    () => categoryTotals(tx, state.budgets, day),
-    [tx, state.budgets, day],
+    () => categoryTotals(tx, state.budgets, month),
+    [tx, state.budgets, month],
   );
 
-  const recent = useMemo(
-    () => [...tx].sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 12),
-    [tx],
-  );
+  const sorted = useMemo(() => [...monthTx].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt)), [monthTx]);
+  const pageCount = Math.max(1, Math.ceil(sorted.length / 12));
+  const shownPage = Math.min(page, pageCount - 1);
+  const recent = sorted.slice(shownPage * 12, (shownPage + 1) * 12);
+  const monthlyBudgets = budgetsForMonth(state.budgets, month);
+  const budgetCategories = [...new Set([...CATEGORIES.filter((c) => !c.income).map((c) => c.name), ...categories.map((c) => c.name)])]
+    .map((name) => ({ name, spent: categories.find((c) => c.name === name)?.spent ?? 0, budget: monthlyBudgets.find((b) => b.category === name)?.limit }));
 
   const [focused, setFocused] = useState<string | null>(null);
-  const max = Math.max(...week.map((d) => d.spent), 1);
-  const shown = week.find((d) => d.label === focused);
+  const max = Math.max(...points.map((d) => d.spent), 1);
+  const shown = points.find((d) => d.date === focused);
+  function selectMonth(date: string) {
+    setMonth(startOfMonth(date));
+    setPage(0);
+    setFocused(null);
+  }
 
   if (!ready) return <div className="flex-1 animate-pulse bg-bg" aria-label="Loading" />;
 
@@ -63,6 +78,18 @@ export default function FinancePage() {
           </button>
         }
       />
+
+      <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center gap-2 px-4 pt-4 sm:px-6">
+        <button type="button" onClick={() => selectMonth(addMonths(month, -1))} aria-label="Previous finance month" className="rounded-lg border border-line px-3 py-1.5">‹</button>
+        <label className="flex items-center gap-2 text-xs text-ink-dim">
+          <span className="sr-only">Finance month</span>
+          <input type="month" value={month.slice(0, 7)} onChange={(e) => e.target.value && selectMonth(`${e.target.value}-01`)}
+            className="min-w-0 rounded-lg border border-line bg-surface px-3 py-2 text-ink" />
+        </label>
+        <button type="button" onClick={() => selectMonth(addMonths(month, 1))} aria-label="Next finance month" className="rounded-lg border border-line px-3 py-1.5">›</button>
+        {!currentMonth && <button type="button" onClick={() => selectMonth(day)} className="px-2 text-xs text-accent-soft">This month</button>}
+        <span className="ms-auto text-[11px] text-ink-faint">Monthly history · saved on this device</span>
+      </div>
 
       {empty ? (
         <EmptyState onStart={() => setFormOpen(true)} />
@@ -89,7 +116,7 @@ export default function FinancePage() {
                 summary.net < 0 ? "text-p-high" : "text-on-accent/70"
               }`}
             >
-              {summary.net < 0 ? "Over budget this month" : "Left this month"}
+              {summary.net < 0 ? "Spent above income" : currentMonth ? "Left this month" : "Month balance"}
             </p>
             <p className="relative mt-3 text-3xl font-semibold tabular-nums sm:text-4xl">
               {compact(Math.abs(summary.net))}
@@ -102,7 +129,7 @@ export default function FinancePage() {
             >
               {summary.net < 0
                 ? `${full(summary.spent)} out against ${full(summary.income)} in`
-                : `${full(Math.round(summary.net / summary.daysLeft))} ${CURRENCY} a day for the ${summary.daysLeft} day${summary.daysLeft === 1 ? "" : "s"} left`}
+                : currentMonth ? `${full(Math.round(summary.net / summary.daysLeft))} ${CURRENCY} a day for the ${summary.daysLeft} day${summary.daysLeft === 1 ? "" : "s"} left` : monthLabel}
             </p>
           </section>
 
@@ -110,33 +137,36 @@ export default function FinancePage() {
           <Stat label="Spent this month" value={summary.spent} tone="out" />
 
           <Card
-            title="This week"
+            title={`Spending · ${monthLabel}`}
             className="sm:col-span-2"
             aside={<span className="text-[11px] text-ink-faint">Tap a bar</span>}
           >
-            <div className="flex h-48 items-end gap-2 sm:h-56 sm:gap-3">
-              {week.map((d, i) => {
-                const active = d.label === focused;
+            <div className="flex h-48 items-end gap-0.5 sm:h-56 sm:gap-1">
+              {points.map((d, i) => {
+                const active = d.date === focused;
                 return (
                   <button
-                    key={d.label}
+                    key={d.date}
                     type="button"
-                    onClick={() => setFocused(active ? null : d.label)}
-                    className="group flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-2"
+                    onClick={() => setFocused(active ? null : d.date)}
+                    aria-label={`${relativeLabel(d.date, day)}: ${full(d.spent)} ${CURRENCY}`}
+                    aria-pressed={active}
+                    title={`${d.label}: ${full(d.spent)} ${CURRENCY}`}
+                    className="group relative flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-2"
                   >
                     {active && (
-                      <span className="animate-pop-in rounded-full bg-ink px-2.5 py-1 text-[11px] font-medium text-bg tabular-nums">
+                      <span className="animate-pop-in absolute top-0 z-10 whitespace-nowrap rounded-full bg-ink px-2 py-1 text-[10px] font-medium text-bg tabular-nums">
                         {compact(d.spent)}
                       </span>
                     )}
                     <span
-                      className={`animate-grow-y w-full rounded-xl transition-colors ${
+                      className={`animate-grow-y w-full rounded-t-md transition-colors ${
                         active ? "bg-accent" : "bg-surface-3 group-hover:bg-surface-3/70"
                       }`}
                       style={{
                         // A floor, so a zero-spend day is still a target you can
                         // hit rather than an invisible sliver.
-                        height: `${Math.max(2, (d.spent / max) * 100)}%`,
+                        height: Math.max(3, (d.spent / max) * 152),
                         animationDelay: `${i * 45}ms`,
                       }}
                     />
@@ -145,7 +175,7 @@ export default function FinancePage() {
                         active ? "font-medium text-accent-soft" : "text-ink-faint"
                       }`}
                     >
-                      {d.label}
+                      {i === 0 || (i + 1) % 5 === 0 || i === points.length - 1 ? d.label : "\u00a0"}
                     </span>
                   </button>
                 );
@@ -159,9 +189,9 @@ export default function FinancePage() {
                 </>
               ) : (
                 <>
-                  Week total:{" "}
+                  Month total:{" "}
                   <span className="text-ink tabular-nums">
-                    {full(week.reduce((s, d) => s + d.spent, 0))}
+                    {full(summary.spent)}
                   </span>{" "}
                   {CURRENCY}
                 </>
@@ -205,8 +235,9 @@ export default function FinancePage() {
           <Card
             title="Transactions"
             className="sm:col-span-2"
-            aside={<span className="text-[11px] text-ink-faint">{tx.length} total</span>}
+            aside={<span className="text-[11px] text-ink-faint">{monthTx.length} this month</span>}
           >
+            {monthTx.length === 0 && <p className="py-6 text-center text-xs text-ink-faint">No entries in {monthLabel}.</p>}
             <ul className="flex flex-col">
               {recent.map((t) => (
                 <li
@@ -250,23 +281,25 @@ export default function FinancePage() {
                 </li>
               ))}
             </ul>
+            {pageCount > 1 && <div className="mt-3 flex items-center justify-between text-xs text-ink-dim">
+              <button type="button" disabled={shownPage === 0} onClick={() => setPage(shownPage - 1)} className="rounded-lg border border-line px-3 py-1.5 disabled:opacity-35">Previous</button>
+              <span>{shownPage + 1} / {pageCount}</span>
+              <button type="button" disabled={shownPage + 1 === pageCount} onClick={() => setPage(shownPage + 1)} className="rounded-lg border border-line px-3 py-1.5 disabled:opacity-35">Next</button>
+            </div>}
           </Card>
 
           <div className="flex flex-col gap-4 sm:col-span-2 sm:gap-5 xl:col-span-1">
-            <Card title="Budgets" aside={<span className="text-[11px] text-ink-faint">monthly</span>}>
-              {categories.length === 0 ? (
-                <p className="text-xs text-ink-faint">
-                  Log some spending and the categories will show up here to cap.
-                </p>
-              ) : (
+            <Card title="Budgets" aside={<span className="text-[11px] text-ink-faint">{monthLabel}</span>}>
                 <ul className="flex flex-col gap-4">
-                  {categories.slice(0, 4).map((c) => (
+                  {budgetCategories.map((c) => (
                     <li key={c.name}>
                       <p className="mb-1.5 flex items-center justify-between gap-2 text-xs">
                         <span className="truncate text-ink-dim">{c.name}</span>
                         <BudgetInput
+                          key={`${month}:${c.budget ?? ""}`}
+                          category={c.name}
                           value={c.budget}
-                          onCommit={(limit) => setBudget(c.name, limit)}
+                          onCommit={(limit) => setBudget(c.name, limit, month.slice(0, 7))}
                         />
                       </p>
                       <Bar
@@ -276,7 +309,6 @@ export default function FinancePage() {
                     </li>
                   ))}
                 </ul>
-              )}
             </Card>
 
             <Card title="Finance quests">
@@ -309,7 +341,7 @@ export default function FinancePage() {
       )}
 
       {formOpen && (
-        <EntrySheet onClose={() => setFormOpen(false)} onSubmit={addTransaction} />
+        <EntrySheet defaultDate={currentMonth ? day : month} onClose={() => setFormOpen(false)} onSubmit={addTransaction} />
       )}
     </>
   );
@@ -346,7 +378,9 @@ function EmptyState({ onStart }: { onStart: () => void }) {
 function EntrySheet({
   onClose,
   onSubmit,
+  defaultDate,
 }: {
+  defaultDate: string;
   onClose: () => void;
   onSubmit: (input: { title: string; amount: number; category: string; date: string }) => void;
 }) {
@@ -354,7 +388,7 @@ function EntrySheet({
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState("Groceries");
-  const [date, setDate] = useState(today());
+  const [date, setDate] = useState(defaultDate);
 
   const value = Number(amount.replace(/[^\d.]/g, ""));
   const valid = title.trim().length > 0 && value > 0;
@@ -498,7 +532,9 @@ function Stat({ label, value, tone }: { label: string; value: number; tone: "in"
 function BudgetInput({
   value,
   onCommit,
+  category,
 }: {
+  category: string;
   value?: number;
   onCommit: (limit: number) => void;
 }) {
@@ -513,7 +549,7 @@ function BudgetInput({
         onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
         inputMode="numeric"
         placeholder="set cap"
-        aria-label="Monthly budget"
+        aria-label={`Monthly budget for ${category}`}
         className="w-20 rounded-md bg-surface-2 px-2 py-0.5 text-end text-[11px] tabular-nums outline-none placeholder:text-ink-faint/70 focus:ring-1 focus:ring-accent"
       />
     </span>

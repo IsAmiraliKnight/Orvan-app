@@ -1,4 +1,4 @@
-import { addDays, startOfWeek, today } from "./dates";
+import { addDays, monthDays, startOfWeek, today } from "./dates";
 import type { Budget, LocalDate, Transaction } from "./types";
 
 export const CURRENCY = "T";
@@ -34,8 +34,16 @@ export function full(n: number): string {
   return Math.round(n).toLocaleString("en-US");
 }
 
-function sameMonth(date: LocalDate, ref: LocalDate): boolean {
+export function sameMonth(date: LocalDate, ref: LocalDate): boolean {
   return date.slice(0, 7) === ref.slice(0, 7);
+}
+
+export function monthTransactions(transactions: Transaction[], ref: LocalDate): Transaction[] {
+  return transactions.filter((t) => sameMonth(t.date, ref));
+}
+
+export function budgetsForMonth(budgets: Budget[], ref: LocalDate): Budget[] {
+  return budgets.filter((b) => b.month === ref.slice(0, 7));
 }
 
 export interface FinanceSummary {
@@ -85,6 +93,15 @@ export function weekSpending(
   });
 }
 
+/** One point per day; the selected month is the entire chart's range. */
+export function monthSpending(transactions: Transaction[], ref: LocalDate): DayPoint[] {
+  const totals = new Map<LocalDate, number>();
+  for (const t of monthTransactions(transactions, ref)) {
+    if (t.amount < 0) totals.set(t.date, (totals.get(t.date) ?? 0) - t.amount);
+  }
+  return monthDays(ref).map((date) => ({ label: String(Number(date.slice(8))), date, spent: totals.get(date) ?? 0 }));
+}
+
 export interface CategoryTotal {
   name: string;
   icon: string;
@@ -108,7 +125,7 @@ export function categoryTotals(
       name,
       icon: categoryIcon(name),
       spent,
-      budget: budgets.find((b) => b.category === name)?.limit,
+      budget: budgets.find((b) => b.category === name && b.month === ref.slice(0, 7))?.limit,
     }))
     .sort((a, b) => b.spent - a.spent);
 }

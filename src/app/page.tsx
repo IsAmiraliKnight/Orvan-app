@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AddTaskSheet } from "@/components/AddTaskSheet";
 import { DatePicker, relativeLabel } from "@/components/DateField";
@@ -8,9 +8,10 @@ import { HomeRail } from "@/components/HomeRail";
 import { LevelUpModal } from "@/components/LevelUpModal";
 import { TaskRow } from "@/components/TaskRow";
 import { TopBar } from "@/components/TopBar";
-import { addDays, parseLocalDate, toLocalDate, today } from "@/lib/domain/dates";
+import { addDays, parseLocalDate, toLocalDate } from "@/lib/domain/dates";
 import type { LocalDate, Project, Task } from "@/lib/domain/types";
 import { DAILY_TASK_XP_CAP } from "@/lib/domain/xp";
+import { isOverdue } from "@/lib/domain/tasks";
 import { sortTasks, useOrvan } from "@/lib/store/store";
 
 const LONG_DATE = new Intl.DateTimeFormat("en-US", {
@@ -43,6 +44,8 @@ interface SectionProps {
   onToggle: (id: string) => void;
   onEdit: (task: Task) => void;
   onDelete: (id: string) => void;
+  collapsible?: boolean;
+  limit?: number;
 }
 
 function Section({
@@ -54,31 +57,44 @@ function Section({
   onToggle,
   onEdit,
   onDelete,
+  collapsible = false,
+  limit,
 }: SectionProps) {
+  const [expanded, setExpanded] = useState(false);
   if (tasks.length === 0) return null;
+  const rows = limit && !expanded ? tasks.slice(0, limit) : tasks;
+  const content = (
+    <>
+      <ul>
+        {rows.map((t) => {
+          const project = projects.find((p) => p.id === t.projectId);
+          return (
+            <TaskRow key={t.id} task={t} projectName={project?.name} projectColor={project?.color}
+              flash={flash?.id === t.id ? flash.text : undefined} onToggle={onToggle} onEdit={onEdit} onDelete={onDelete} />
+          );
+        })}
+      </ul>
+      {limit && tasks.length > limit && (
+        <button type="button" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}
+          className="mx-3 my-2 text-xs text-accent-soft hover:underline">
+          {expanded ? "Show fewer" : `Show all ${tasks.length} tasks`}
+        </button>
+      )}
+    </>
+  );
+  if (collapsible) return (
+    <details className="rounded-2xl border border-line bg-surface p-2">
+      <summary className="cursor-pointer px-3 py-2 text-xs text-ink-dim">{label} <span className="ms-2 text-ink-faint">{tasks.length}</span></summary>
+      {content}
+    </details>
+  );
   return (
     <section className="rounded-2xl border border-line bg-surface p-2">
       <h2 className="flex items-center gap-2 px-3 pb-1 pt-2 text-[11px] font-medium uppercase tracking-widest">
         <span className={tone === "warn" ? "text-p-high" : "text-ink-faint"}>{label}</span>
         <span className="text-ink-faint/60 tabular-nums">{tasks.length}</span>
       </h2>
-      <ul>
-        {tasks.map((t) => {
-          const project = projects.find((p) => p.id === t.projectId);
-          return (
-            <TaskRow
-              key={t.id}
-              task={t}
-              projectName={project?.name}
-              projectColor={project?.color}
-              flash={flash?.id === t.id ? flash.text : undefined}
-              onToggle={onToggle}
-              onEdit={onEdit}
-              onDelete={onDelete}
-            />
-          );
-        })}
-      </ul>
+      {content}
     </section>
   );
 }
@@ -87,6 +103,7 @@ export default function HomePage() {
   const {
     state,
     ready,
+    now,
     addTask,
     updateTask,
     ensureRecurringTasksThrough,
@@ -103,9 +120,16 @@ export default function HomePage() {
   /** Ids ticked in the last moment, still shown in the list they were ticked in. */
   const [justDone, setJustDone] = useState<ReadonlySet<string>>(() => new Set());
 
-  const day = today();
+  const day = toLocalDate(now);
   const [viewDate, setViewDate] = useState<LocalDate>(day);
   const isToday = viewDate === day;
+  const previousDay = useRef(day);
+
+  useEffect(() => {
+    const previous = previousDay.current;
+    if (previous !== day) setViewDate((date) => date === previous ? day : date);
+    previousDay.current = day;
+  }, [day]);
 
   // Keep the fixed day tabs populated even before somebody completes today's
   // occurrence. Custom dates extend the materialised range on demand.
@@ -114,25 +138,27 @@ export default function HomePage() {
     ensureRecurringTasksThrough(viewDate > addDays(day, 2) ? viewDate : addDays(day, 2));
   }, [ready, day, viewDate, state.tasks, ensureRecurringTasksThrough]);
 
-  const { overdue, open, done } = useMemo(() => {
-    const forDay = state.tasks.filter((t) => (t.dueDate ?? day) === viewDate);
+  const { overdue, open, done, unscheduled } = useMemo(() => {
+    const forDay = state.tasks.filter((t) => t.dueDate === viewDate);
     /*
      * A task you just ticked keeps its place in the open list for a beat before
      * moving. Without it the row is unmounted on the same frame as the click,
      * and the tick you just made is never actually drawn where you made it.
      */
     const held = (t: Task) => justDone.has(t.id);
+    const late = (t: Task) => isOverdue(held(t) ? { ...t, status: "open" } : t, now);
     return {
       // Only ever surfaced on Today: on a future day an unfinished past task is
       // not "overdue relative to what you are looking at", it is just noise.
       overdue: isToday
         ? sortTasks(
             state.tasks.filter(
-              (t) => t.dueDate && t.dueDate < day && (t.status === "open" || held(t)),
+              (t) => late(t),
             ),
           )
         : [],
-      open: sortTasks(forDay.filter((t) => t.status === "open" || held(t))),
+      open: sortTasks(forDay.filter((t) => (t.status === "open" || held(t)) && !(isToday && late(t)))),
+      unscheduled: sortTasks(state.tasks.filter((t) => !t.dueDate && (t.status === "open" || held(t)))),
       /*
        * Anything finished *for* this day, plus — when looking at today —
        * anything finished *on* it. Without the second half, completing an
@@ -144,11 +170,11 @@ export default function HomePage() {
         (t) =>
           t.status === "done" &&
           !held(t) &&
-          ((t.dueDate ?? day) === viewDate ||
+          (t.dueDate === viewDate ||
             (isToday && t.completedAt !== undefined && toLocalDate(new Date(t.completedAt)) === day)),
       ),
     };
-  }, [state.tasks, day, viewDate, isToday, justDone]);
+  }, [state.tasks, day, now, viewDate, isToday, justDone]);
 
   function handleToggle(id: string) {
     const task = state.tasks.find((t) => t.id === id);
@@ -210,7 +236,7 @@ export default function HomePage() {
     return <div className="flex-1 animate-pulse bg-bg" aria-label="Loading" />;
   }
 
-  const isEmpty = overdue.length + open.length + done.length === 0;
+  const isEmpty = overdue.length + open.length + done.length + unscheduled.length === 0;
   const custom = !TABS.some(([offset]) => addDays(day, offset) === viewDate);
 
   return (
@@ -242,7 +268,7 @@ export default function HomePage() {
                 const d = addDays(day, offset);
                 const on = viewDate === d;
                 const count = state.tasks.filter(
-                  (t) => (t.dueDate ?? day) === d && t.status === "open",
+                  (t) => t.dueDate === d && t.status === "open",
                 ).length;
                 return (
                   <button
@@ -303,6 +329,12 @@ export default function HomePage() {
             </button>
           </div>
 
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-xs text-ink-dim" aria-label="Task summary">
+            <span>{open.filter((t) => t.status === "open").length} to do</span>
+            {overdue.length > 0 && <span className="text-p-high">{overdue.length} overdue</span>}
+            <span>{done.length} done</span>
+          </div>
+
           {isEmpty ? (
             <div className="rounded-2xl border border-dashed border-line py-20 text-center">
               <p className="text-4xl" aria-hidden="true">
@@ -324,6 +356,7 @@ export default function HomePage() {
                 onToggle={handleToggle}
                 onEdit={setEditingTask}
                 onDelete={deleteTask}
+                limit={4}
               />
               <Section
                 label={relativeLabel(viewDate, day)}
@@ -335,6 +368,16 @@ export default function HomePage() {
                 onDelete={deleteTask}
               />
               <Section
+                label="No date"
+                tasks={unscheduled}
+                projects={state.projects}
+                flash={flash}
+                onToggle={handleToggle}
+                onEdit={setEditingTask}
+                onDelete={deleteTask}
+                collapsible
+              />
+              <Section
                 label="Done"
                 tasks={done}
                 projects={state.projects}
@@ -342,6 +385,7 @@ export default function HomePage() {
                 onToggle={handleToggle}
                 onEdit={setEditingTask}
                 onDelete={deleteTask}
+                collapsible
               />
             </>
           )}

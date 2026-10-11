@@ -12,9 +12,9 @@ import {
 } from "react";
 
 import { buildDemoState } from "@/lib/demo/seed";
-import { today } from "@/lib/domain/dates";
+import { addDays, toLocalDate, today } from "@/lib/domain/dates";
 import { levelFromTotalXp } from "@/lib/domain/level";
-import { RECURRING_PRIORITY, materializeRecurrences } from "@/lib/domain/recurrence";
+import { RECURRING_PRIORITY, editTaskSeries, materializeRecurrences } from "@/lib/domain/recurrence";
 import { registerActivity } from "@/lib/domain/streak";
 import { awardForTaskCompletion, totalXp } from "@/lib/domain/xp";
 import type {
@@ -80,6 +80,7 @@ export interface CompletionResult {
 interface OrvanContext {
   state: AppState;
   ready: boolean;
+  now: Date;
   addTask: (input: NewTaskInput) => void;
   updateTask: (id: string, patch: Partial<Omit<Task, "id">>) => void;
   ensureRecurringTasksThrough: (date: LocalDate) => void;
@@ -91,7 +92,7 @@ interface OrvanContext {
   deleteProject: (id: string) => void;
   addTransaction: (input: NewTransactionInput) => void;
   deleteTransaction: (id: string) => void;
-  setBudget: (category: string, limit: number) => void;
+  setBudget: (category: string, limit: number, month?: string) => void;
   addGoal: (input: { title: string; area: GoalArea; targetDate?: LocalDate }) => void;
   updateGoal: (id: string, patch: Partial<Omit<Goal, "id">>) => void;
   deleteGoal: (id: string) => void;
@@ -126,6 +127,9 @@ const Ctx = createContext<OrvanContext | null>(null);
 export function OrvanProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(EMPTY_STATE);
   const [ready, setReady] = useState(false);
+  const [now, setNow] = useState(() => new Date());
+  // Every page has at least the next seven days; visited ranges extend this.
+  const recurrenceThrough = useRef(addDays(today(), 6));
 
   /**
    * Mirrors `state` but is updated synchronously. Actions need to read the
@@ -151,7 +155,12 @@ export function OrvanProvider({ children }: { children: ReactNode }) {
       // populated account rather than on empty charts, the tester build on the
       // clean slate they are there to fill.
       const fresh = BLANK ? EMPTY_STATE : buildDemoState();
-      const restored = raw ? ({ ...EMPTY_STATE, ...JSON.parse(raw) } as AppState) : fresh;
+      const saved = raw ? ({ ...EMPTY_STATE, ...JSON.parse(raw) } as AppState) : fresh;
+      const restored = {
+        ...saved,
+        budgets: saved.budgets.map((budget) => ({ ...budget, month: budget.month ?? today().slice(0, 7) })),
+        tasks: materializeRecurrences(saved.tasks, recurrenceThrough.current, uid, new Date().toISOString()),
+      };
       stateRef.current = restored;
       setState(restored);
     } catch {
@@ -160,6 +169,27 @@ export function OrvanProvider({ children }: { children: ReactNode }) {
     }
     setReady(true);
   }, []);
+
+  useEffect(() => {
+    const refresh = () => setNow(new Date());
+    const timer = window.setInterval(refresh, 30_000);
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+    };
+  }, []);
+
+  const localDay = toLocalDate(now);
+  useEffect(() => {
+    if (!ready) return;
+    const through = addDays(localDay, 6);
+    if (through > recurrenceThrough.current) recurrenceThrough.current = through;
+    update((s) => {
+      const tasks = materializeRecurrences(s.tasks, recurrenceThrough.current, uid, new Date().toISOString());
+      return tasks === s.tasks ? s : { ...s, tasks };
+    });
+  }, [ready, localDay, update]);
 
   useEffect(() => {
     if (!ready) return;
@@ -174,7 +204,7 @@ export function OrvanProvider({ children }: { children: ReactNode }) {
     (input: NewTaskInput) => {
       update((s) => ({
         ...s,
-        tasks: [
+        tasks: materializeRecurrences([
           ...s.tasks,
           {
             id: uid(),
@@ -182,17 +212,18 @@ export function OrvanProvider({ children }: { children: ReactNode }) {
             // Enforced here rather than in the form, so no other caller can
             // route around the rule that repeats pay the Medium rate.
             priority: input.recurrence ? RECURRING_PRIORITY : input.priority,
-            dueDate: input.dueDate ?? today(),
-            dueTime: input.dueTime,
-            durationMin: input.dueTime ? input.durationMin : undefined,
+            dueDate: input.dueDate ?? (input.recurrence ? today() : undefined),
+            dueTime: input.dueDate || input.recurrence ? input.dueTime : undefined,
+            durationMin: input.dueTime && (input.dueDate || input.recurrence) ? input.durationMin : undefined,
             projectId: input.projectId,
             colorKey: input.colorKey,
             parentId: input.parentId,
             recurrence: input.recurrence,
+            recurrenceStartDate: input.recurrence ? input.dueDate ?? today() : undefined,
             status: "open",
             createdAt: new Date().toISOString(),
           },
-        ],
+        ], recurrenceThrough.current, uid, new Date().toISOString()),
       }));
     },
     [update],
@@ -201,40 +232,10 @@ export function OrvanProvider({ children }: { children: ReactNode }) {
   const updateTask = useCallback(
     (id: string, patch: Partial<Omit<Task, "id">>) => {
       update((s) => {
-        const target = s.tasks.find((task) => task.id === id);
-        if (!target) return s;
-
-        const nextPatch = {
-          ...patch,
-          ...(patch.title !== undefined ? { title: patch.title.trim() } : {}),
-          ...(patch.recurrence ? { priority: RECURRING_PRIORITY } : {}),
-        };
-
-        /*
-         * Content edits apply to the whole recurring series. The date remains
-         * occurrence-specific: moving Tuesday's copy must not stack every copy
-         * onto Tuesday.
-         */
-        const rootId = target.parentTaskId ?? target.id;
-        const shared = { ...nextPatch };
-        delete shared.dueDate;
-        delete shared.status;
-        delete shared.completedAt;
-        delete shared.createdAt;
-        delete shared.occurrenceDate;
-        delete shared.parentTaskId;
-        const belongsToSeries = (task: Task) =>
-          task.id === rootId || task.parentTaskId === rootId;
-
-        return {
+        const tasks = editTaskSeries(s.tasks, id, patch, today());
+        return tasks === s.tasks ? s : {
           ...s,
-          tasks: s.tasks.map((task) => {
-            if (task.id === id) return { ...task, ...nextPatch };
-            if ((target.recurrence || target.parentTaskId) && belongsToSeries(task)) {
-              return { ...task, ...shared };
-            }
-            return task;
-          }),
+          tasks: materializeRecurrences(tasks, recurrenceThrough.current, uid, new Date().toISOString()),
         };
       });
     },
@@ -243,6 +244,7 @@ export function OrvanProvider({ children }: { children: ReactNode }) {
 
   const ensureRecurringTasksThrough = useCallback(
     (date: LocalDate) => {
+      if (date > recurrenceThrough.current) recurrenceThrough.current = date;
       update((s) => {
         const tasks = materializeRecurrences(s.tasks, date, uid, new Date().toISOString());
         return tasks === s.tasks ? s : { ...s, tasks };
@@ -429,11 +431,11 @@ export function OrvanProvider({ children }: { children: ReactNode }) {
   );
 
   const setBudget = useCallback(
-    (category: string, limit: number) => {
+    (category: string, limit: number, month: string = today().slice(0, 7)) => {
       update((s) => {
-        const rest = s.budgets.filter((b) => b.category !== category);
+        const rest = s.budgets.filter((b) => b.category !== category || b.month !== month);
         // A zero or negative ceiling means "no budget", not "a budget of nothing".
-        const budgets: Budget[] = limit > 0 ? [...rest, { category, limit }] : rest;
+        const budgets: Budget[] = limit > 0 ? [...rest, { category, limit, month }] : rest;
         return { ...s, budgets };
       });
     },
@@ -493,6 +495,7 @@ export function OrvanProvider({ children }: { children: ReactNode }) {
     () => ({
       state,
       ready,
+      now,
       addTask,
       updateTask,
       ensureRecurringTasksThrough,
@@ -514,6 +517,7 @@ export function OrvanProvider({ children }: { children: ReactNode }) {
     [
       state,
       ready,
+      now,
       addTask,
       updateTask,
       ensureRecurringTasksThrough,
